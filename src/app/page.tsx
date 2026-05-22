@@ -29,6 +29,15 @@ const FEATURED_GAMES: GameConfig[] = [
   }
 ];
 
+const PROMPT_SUGGESTIONS = [
+  "A hardcore boxing game where zombie heads fall from the sky and I have to punch them to survive! (Use 🧟 emoji, red theme)",
+  "A space arcade game where I have to dodge raining asteroids for 30 seconds! (Use ☄️ emoji, purple theme)",
+  "A gym workout where I do as many squats as possible in 60 seconds while holding a boulder. (Use 🪨 emoji, orange theme)",
+  "A yoga balance test where I hold a strict pose for 30 seconds to center my chakra. (Use 🪷 emoji, blue theme)",
+  "A ninja training game where I have to punch incoming shurikens! (Use 🥷 emoji, dark grey theme)",
+  "A pizza chef game where I have to catch falling pizzas with my body! (Use 🍕 emoji, yellow theme)"
+];
+
 export default function Home() {
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -86,6 +95,17 @@ export default function Home() {
           >
             {isGenerating ? 'Compiling Engine...' : 'Generate Game'}
           </button>
+        </div>
+
+        <div className={styles.suggestionsContainer}>
+          <p className={styles.suggestionsTitle}>Or try one of these prompts:</p>
+          <div className={styles.suggestionsList}>
+            {PROMPT_SUGGESTIONS.map((sug, i) => (
+              <button key={i} className={styles.suggestionChip} onClick={() => setPrompt(sug)}>
+                {sug}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
