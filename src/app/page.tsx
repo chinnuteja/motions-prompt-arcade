@@ -98,7 +98,9 @@ export default function Home() {
         </div>
 
         <div className={styles.suggestionsContainer}>
-          <p className={styles.suggestionsTitle}>Or try one of these prompts:</p>
+          <p className={styles.suggestionsTitle}>
+            Need inspiration? Click a reference prompt below, then edit the emojis and theme to see the AI generate a unique game!
+          </p>
           <div className={styles.suggestionsList}>
             {PROMPT_SUGGESTIONS.map((sug, i) => (
               <button key={i} className={styles.suggestionChip} onClick={() => setPrompt(sug)}>
@@ -106,6 +108,11 @@ export default function Home() {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className={styles.scrollHint} onClick={() => window.scrollTo({ top: 800, behavior: 'smooth'})}>
+          <span>Explore Featured Games Below</span>
+          <div className={styles.scrollArrow}>↓</div>
         </div>
       </div>
 
