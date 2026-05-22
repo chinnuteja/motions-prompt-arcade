@@ -1,12 +1,12 @@
-# PromptCade: Generative Computer Vision Engine
+# Motions Prompt Arcade: Generative Computer Vision Engine
 
-**PromptCade** is a next-generation web engine that transforms plain English prompts into fully playable, 60fps computer-vision games. You don't need a controller—your physical body is the controller.
+**Motions Prompt Arcade** is a next-generation web engine that transforms plain English prompts into fully playable, 60fps computer-vision games. You don't need a controller—your physical body is the controller.
 
 Type *"A game where I have to physically punch falling zombie heads to survive"* and the engine will instantly compile a game with physical hitboxes, zombie targets, and real-time AI skeleton tracking.
 
 ## 🚀 The Vision
 What if "Vibe Coding" applied to physical gameplay? 
-Most generative AI applications output text, images, or static code. PromptCade introduces a **Parametric Translation Engine** that maps natural language directly into physical physics paradigms.
+Most generative AI applications output text, images, or static code. Motions Prompt Arcade introduces a **Parametric Translation Engine** that maps natural language directly into physical physics paradigms.
 
 ## 🎮 How It Works
 
@@ -16,7 +16,7 @@ Most generative AI applications output text, images, or static code. PromptCade 
 3. **Play**: Step back from your webcam. An AI skeleton maps your joints in real-time, allowing you to physically jump, squat, punch, and dodge to interact with the game world.
 
 ### For the Engineer (Technical)
-PromptCade is built to guarantee **0 latency and 100% stability**, bypassing the traditional pitfalls of live AI code generation.
+Motions Prompt Arcade is built to guarantee **0 latency and 100% stability**, bypassing the traditional pitfalls of live AI code generation.
 
 * **The Vision Layer (`MediaPipe Pose`)**: Runs completely client-side. We extract 33 3D landmarks of the human body at 60fps.
 * **The Physics Loop (`requestAnimationFrame`)**: High-frequency body tracking destroys React's render cycle. We built a custom native `requestAnimationFrame` loop that directly manipulates the DOM and Canvas, bypassing React state entirely to maintain a locked 60 frames per second.
