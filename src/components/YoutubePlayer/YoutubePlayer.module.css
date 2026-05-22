@@ -1,0 +1,31 @@
+.container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #000;
+}
+
+.youtubeWrapper {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Make iframe 150% size and center it to hide YouTube branding/borders */
+  transform: scale(1.3);
+  transform-origin: center center;
+}
+
+.iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.clickShield {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  /* Blocks all clicks to the iframe so the user can't pause manually or click links */
+}

@@ -1,0 +1,63 @@
+.container {
+  position: absolute;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  width: 200px;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 
+    0 0 0 2px rgba(99, 102, 241, 0.3),
+    0 8px 25px rgba(0, 0, 0, 0.5);
+  background-color: #000;
+  z-index: 50;
+  
+  /* Start hidden, animate in */
+  opacity: 0;
+  transform: scale(0.8) translateY(20px);
+  pointer-events: none;
+  transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.container.active {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  pointer-events: auto;
+}
+
+.fullscreen {
+  position: absolute;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  bottom: auto;
+  right: auto;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: 10;
+}
+
+.fullscreen.active {
+  transform: none;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); 
+}
+
+.error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(244, 63, 94, 0.2);
+  color: #fca5a5;
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 0.75rem;
+}
