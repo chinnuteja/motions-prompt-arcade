@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Kinetics - Playable Video MVP",
-  description: "Interactive educational video powered by MediaPipe in the browser.",
+  title: "Prompt Arcade - Generative Camera Engine",
+  description: "Play generative AI games with your physical body.",
 };
 
 export default function RootLayout({

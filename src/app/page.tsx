@@ -77,7 +77,7 @@ export default function Home() {
   return (
     <main className={styles.main}>
       <div className={styles.hero}>
-        <h1 className={styles.title}>MOTIONS<span className={styles.accent}>.build</span> (Prototype)</h1>
+        <h1 className={styles.title}>PROMPT<span className={styles.accent}>.arcade</span></h1>
         <p className={styles.subtitle}>Build any camera game in seconds.</p>
         
         <div className={styles.creatorInput}>
