@@ -118,16 +118,18 @@ export function GameEngine({ config }: GameEngineProps) {
 
   // Handle start button
   const handleStart = () => {
-    // Use the composite canvas stream for recording (webcam + skeleton + emojis + HUD)
-    if (compositeCanvasRef.current) {
-      const compositeStream = compositeCanvasRef.current.captureStream(30);
-      startRecording(compositeStream);
-    } else if (webcamVideo?.srcObject) {
-      // Fallback to raw webcam if composite canvas isn't ready
-      startRecording(webcamVideo.srcObject as MediaStream);
-    }
     dispatch({ type: 'START_COUNTDOWN' });
   };
+
+  // Start recording when actual gameplay begins (skips the countdown)
+  useEffect(() => {
+    if (gameState.status === 'PLAYING') {
+      if (compositeCanvasRef.current) {
+        const compositeStream = compositeCanvasRef.current.captureStream(30);
+        startRecording(compositeStream);
+      }
+    }
+  }, [gameState.status, startRecording]);
 
   // Countdown timer
   useEffect(() => {
@@ -395,7 +397,7 @@ export function GameEngine({ config }: GameEngineProps) {
                {/* Skeleton Canvas Overlay */}
                <canvas ref={canvasRef} className={styles.skeletonCanvas} />
                {/* Hidden composite canvas for recording */}
-               <canvas ref={compositeCanvasRef} style={{ display: 'none' }} />
+               <canvas ref={compositeCanvasRef} width={640} height={480} style={{ display: 'none' }} />
               
               {/* Massive Game Instructions */}
               <div className={styles.gameInstructionBanner} style={{ color: config.themeColor || '#fff', textShadow: `0 4px 30px rgba(0,0,0,0.8), 0 0 20px ${config.themeColor || '#6366f1'}` }}>
