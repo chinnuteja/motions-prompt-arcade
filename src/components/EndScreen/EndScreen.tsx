@@ -1,26 +1,22 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DemoVideo } from '../../lib/types';
+import { GameConfig, encodeGameConfig } from '../../lib/schema';
 import styles from './EndScreen.module.css';
 
 interface EndScreenProps {
   recordedBlob: Blob | null;
-  video: DemoVideo | null;
-  customTitle?: string;
+  config: GameConfig;
+  score: number;
 }
 
-export function EndScreen({ recordedBlob, video, customTitle }: EndScreenProps) {
+export function EndScreen({ recordedBlob, config, score }: EndScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isZoomed, setIsZoomed] = useState(false);
+  const [copied, setCopied] = useState(false);
   const videoUrl = useMemo(() => {
     if (!recordedBlob) return null;
     return URL.createObjectURL(recordedBlob);
   }, [recordedBlob]);
-
-  const challengeCount = video?.challenges.length || 0;
-  const mechanics = Array.from(new Set((video?.challenges || []).map((c) => c.challengeType || c.id)));
-  const primitives = Array.from(new Set((video?.challenges || []).map((c) => c.selectedPrimitive || c.challengeType || c.id)));
 
   useEffect(() => {
     return () => {
@@ -28,67 +24,79 @@ export function EndScreen({ recordedBlob, video, customTitle }: EndScreenProps) 
     };
   }, [videoUrl]);
 
-  const handleMetadata = () => {
-    if (videoRef.current) {
-      // Start playback 10 seconds before the end
-      const vid = videoRef.current;
-      vid.currentTime = Math.max(0, vid.duration - 10);
+  const handleDownload = () => {
+    if (!recordedBlob) return;
+    const url = URL.createObjectURL(recordedBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `prompt-arcade-${config.title.replace(/\s+/g, '-').toLowerCase()}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleShareLink = async () => {
+    const encoded = encodeGameConfig(config);
+    const shareUrl = `${window.location.origin}/play?config=${encoded}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement('textarea');
+      textarea.value = shareUrl;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
     }
   };
 
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      const vid = videoRef.current;
-      
-      // Loop the last 10 seconds manually
-      if (vid.currentTime >= vid.duration - 0.2) {
-        vid.currentTime = Math.max(0, vid.duration - 10);
-        setIsZoomed(false); // Reset zoom on loop
-      }
-      
-      // Trigger the zoom effect 3 seconds into the 10-second clip
-      if (vid.duration > 10) {
-        if (!isZoomed && vid.currentTime > vid.duration - 7 && vid.currentTime < vid.duration - 1) {
-          setIsZoomed(true);
-        }
-      } else {
-         // Fallback if video is shorter than 10s
-         if (!isZoomed && vid.currentTime > vid.duration * 0.5) setIsZoomed(true);
-      }
-    }
+  const handlePlayAgain = () => {
+    window.location.reload();
   };
 
   return (
     <div className={styles.container}>
       <div className={styles.sidebar}>
-        <h1 className={styles.title}>{customTitle || "Here's your clip"}</h1>
+        <h1 className={styles.title}>
+          {score > 0 ? `${score} Points!` : "Game Over"}
+        </h1>
         <p className={styles.subtitle}>
-          Generated product → Playable camera moment → Shareable output.
+          {config.title} — powered by AI prompt compilation and real-time body tracking.
         </p>
 
         <div className={styles.buildReceipt}>
-          <h3 className={styles.receiptTitle}>Build Receipt</h3>
-          <div className={styles.receiptRow}><span>Source</span><strong>{video?.title || 'YouTube Video'}</strong></div>
-          <div className={styles.receiptRow}><span>Mechanics</span><strong>{challengeCount}</strong></div>
-          <div className={styles.receiptRow}><span>Challenge Types</span><strong>{mechanics.slice(0, 3).join(', ') || 'pose'}</strong></div>
-          <div className={styles.receiptRow}><span>CV Primitives</span><strong>{primitives.slice(0, 3).join(', ') || 'pose-tracking'}</strong></div>
+          <h3 className={styles.receiptTitle}>Game Receipt</h3>
+          <div className={styles.receiptRow}><span>Game</span><strong>{config.title}</strong></div>
+          <div className={styles.receiptRow}><span>Mechanic</span><strong>{config.mechanic}</strong></div>
+          <div className={styles.receiptRow}><span>Primitive</span><strong>{config.primitive}</strong></div>
+          <div className={styles.receiptRow}><span>Duration</span><strong>{config.duration}s</strong></div>
+          <div className={styles.receiptRow}><span>Final Score</span><strong>{score}</strong></div>
           <div className={styles.receiptRow}><span>Processing</span><strong>Browser-local MediaPipe</strong></div>
-          <div className={styles.receiptRow}><span>Scope</span><strong>Narrated/instructional v1</strong></div>
-          <div className={styles.receiptRow}><span>Created</span><strong>~30s</strong></div>
         </div>
         
         <div className={styles.actions}>
-          <button className={styles.primaryButton}>
-            Download Clip ↓
+          {recordedBlob && (
+            <button className={styles.primaryButton} onClick={handleDownload}>
+              Download Clip ↓
+            </button>
+          )}
+          <button className={`${styles.secondaryButton} ${copied ? styles.copiedFlash : ''}`} onClick={handleShareLink}>
+            {copied ? 'Copied to Clipboard! ✅' : 'Share Game Link 🔗'}
           </button>
-          <button className={styles.secondaryButton}>
-            Copy Link 🔗
+          <button className={styles.tertiaryButton} onClick={handlePlayAgain}>
+            Play Again ↻
           </button>
         </div>
       </div>
 
       <div className={styles.phonePreview}>
-        <div className={`${styles.phoneFrame} ${isZoomed ? styles.zoomed : ''}`}>
+        <div className={styles.phoneFrame}>
           {videoUrl ? (
             <video 
               ref={videoRef}
@@ -96,20 +104,22 @@ export function EndScreen({ recordedBlob, video, customTitle }: EndScreenProps) 
               className={styles.videoPlayer}
               autoPlay 
               muted 
+              loop
               playsInline
-              onLoadedMetadata={handleMetadata}
-              onTimeUpdate={handleTimeUpdate}
             />
           ) : (
-            <div className={styles.emptyVideo}>No recording found</div>
+            <div className={styles.emptyVideo}>
+              <div className={styles.emptyIcon}>🎮</div>
+              <p>No recording captured</p>
+            </div>
           )}
           
-          {/* Vibe UI overlays to make it look like a real vertical video */}
-          <div className={styles.caption}>
-            wait this is actually genius for screen time 😭
-          </div>
+          {/* Branded overlays */}
           <div className={styles.watermark}>
-            KINETICS
+            PROMPT.arcade
+          </div>
+          <div className={styles.caption}>
+            {config.threatEmoji || '🎯'} {config.title} — Score: {score}
           </div>
         </div>
       </div>

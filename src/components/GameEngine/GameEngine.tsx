@@ -67,6 +67,8 @@ export function GameEngine({ config }: GameEngineProps) {
   
   // Game mechanic states
   const [threats, setThreats] = useState<{ id: number; lane: number }[]>([]);
+  // Keep threats in sync with ref for composite drawing
+  useEffect(() => { threatsRef.current = threats; }, [threats]);
   const threatIdCounter = useRef(0);
   const lastThreatTime = useRef(0);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
@@ -86,6 +88,10 @@ export function GameEngine({ config }: GameEngineProps) {
   const laneIndicatorRef = useRef<HTMLDivElement>(null);
   const poseSilhouetteRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Composite recording canvas (hidden, off-screen)
+  const compositeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const threatsRef = useRef<{ id: number; lane: number }[]>([]);
 
   useEffect(() => {
     // Resize canvas to match screen
@@ -112,7 +118,12 @@ export function GameEngine({ config }: GameEngineProps) {
 
   // Handle start button
   const handleStart = () => {
-    if (webcamVideo?.srcObject) {
+    // Use the composite canvas stream for recording (webcam + skeleton + emojis + HUD)
+    if (compositeCanvasRef.current) {
+      const compositeStream = compositeCanvasRef.current.captureStream(30);
+      startRecording(compositeStream);
+    } else if (webcamVideo?.srcObject) {
+      // Fallback to raw webcam if composite canvas isn't ready
       startRecording(webcamVideo.srcObject as MediaStream);
     }
     dispatch({ type: 'START_COUNTDOWN' });
@@ -165,7 +176,7 @@ export function GameEngine({ config }: GameEngineProps) {
          conf = evaluator.current(currentLandmarks);
       }
 
-      // 1.5 Draw Skeleton
+      // 1.5 Draw Skeleton on visible canvas
       if (canvasRef.current) {
         const ctx = canvasRef.current.getContext('2d');
         if (ctx) {
@@ -174,6 +185,63 @@ export function GameEngine({ config }: GameEngineProps) {
           } else {
              ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
           }
+        }
+      }
+
+      // 1.6 Draw Composite Frame for recording (webcam + skeleton + HUD)
+      if (compositeCanvasRef.current && webcamVideo) {
+        const cc = compositeCanvasRef.current;
+        const cctx = cc.getContext('2d');
+        if (cctx) {
+          // Set composite canvas size to match webcam
+          if (cc.width !== 640) cc.width = 640;
+          if (cc.height !== 480) cc.height = 480;
+
+          // Draw mirrored webcam feed
+          cctx.save();
+          cctx.translate(cc.width, 0);
+          cctx.scale(-1, 1);
+          cctx.drawImage(webcamVideo, 0, 0, cc.width, cc.height);
+          cctx.restore();
+
+          // Draw skeleton overlay
+          if (currentLandmarks) {
+            drawSkeleton(cctx, currentLandmarks, cc.width, cc.height);
+          }
+
+          // Draw falling emoji threats
+          const currentThreats = threatsRef.current;
+          if (currentThreats.length > 0 && config.threatEmoji) {
+            cctx.font = '48px serif';
+            cctx.textAlign = 'center';
+            for (const threat of currentThreats) {
+              const x = (0.2 + threat.lane * 0.3) * cc.width;
+              cctx.fillText(config.threatEmoji, x, cc.height * 0.3);
+            }
+          }
+
+          // Draw HUD: Score + Time
+          cctx.fillStyle = 'rgba(0,0,0,0.5)';
+          cctx.fillRect(10, 10, 100, 50);
+          cctx.fillRect(cc.width - 110, 10, 100, 50);
+          cctx.fillStyle = '#fff';
+          cctx.font = 'bold 24px Inter, sans-serif';
+          cctx.textAlign = 'left';
+          cctx.fillText(`${gameState.score}`, 30, 45);
+          cctx.textAlign = 'right';
+          cctx.fillText(`${gameState.timeLeft}s`, cc.width - 30, 45);
+          cctx.font = '10px Inter, sans-serif';
+          cctx.fillStyle = '#a1a1aa';
+          cctx.textAlign = 'left';
+          cctx.fillText('SCORE', 30, 25);
+          cctx.textAlign = 'right';
+          cctx.fillText('TIME', cc.width - 30, 25);
+
+          // Draw game instructions
+          cctx.fillStyle = config.themeColor || '#fff';
+          cctx.font = 'bold 16px Inter, sans-serif';
+          cctx.textAlign = 'center';
+          cctx.fillText(config.instructions.toUpperCase(), cc.width / 2, cc.height - 20);
         }
       }
 
@@ -289,7 +357,7 @@ export function GameEngine({ config }: GameEngineProps) {
 
 
   if (gameState.status === 'GAME_OVER') {
-    return <EndScreen recordedBlob={recordedBlob} video={null} customTitle={`Score: ${gameState.score}`} />;
+    return <EndScreen recordedBlob={recordedBlob} config={config} score={gameState.score} />;
   }
 
   if (gameState.status === 'SETUP') {
@@ -324,8 +392,10 @@ export function GameEngine({ config }: GameEngineProps) {
 
           {gameState.status === 'PLAYING' && (
             <div className={styles.playingOverlay}>
-              {/* Skeleton Canvas Overlay */}
-              <canvas ref={canvasRef} className={styles.skeletonCanvas} />
+               {/* Skeleton Canvas Overlay */}
+               <canvas ref={canvasRef} className={styles.skeletonCanvas} />
+               {/* Hidden composite canvas for recording */}
+               <canvas ref={compositeCanvasRef} style={{ display: 'none' }} />
               
               {/* Massive Game Instructions */}
               <div className={styles.gameInstructionBanner} style={{ color: config.themeColor || '#fff', textShadow: `0 4px 30px rgba(0,0,0,0.8), 0 0 20px ${config.themeColor || '#6366f1'}` }}>
