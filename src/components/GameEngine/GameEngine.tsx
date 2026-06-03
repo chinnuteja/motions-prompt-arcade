@@ -14,8 +14,10 @@ import { NormalizedLandmark } from '@mediapipe/tasks-vision';
 import styles from './GameEngine.module.css';
 import confetti from 'canvas-confetti';
 
-function drawSkeleton(ctx: CanvasRenderingContext2D, landmarks: NormalizedLandmark[], width: number, height: number) {
-  ctx.clearRect(0, 0, width, height);
+function drawSkeleton(ctx: CanvasRenderingContext2D, landmarks: NormalizedLandmark[], width: number, height: number, clear: boolean = true) {
+  if (clear) {
+    ctx.clearRect(0, 0, width, height);
+  }
   
   const POSE_CONNECTIONS = [
     [0, 1], [1, 2], [2, 3], [3, 7], [0, 4], [4, 5], [5, 6], [6, 8], [9, 10],
@@ -206,9 +208,9 @@ export function GameEngine({ config }: GameEngineProps) {
           cctx.drawImage(webcamVideo, 0, 0, cc.width, cc.height);
           cctx.restore();
 
-          // Draw skeleton overlay
+          // Draw skeleton overlay without clearing the webcam feed
           if (currentLandmarks) {
-            drawSkeleton(cctx, currentLandmarks, cc.width, cc.height);
+            drawSkeleton(cctx, currentLandmarks, cc.width, cc.height, false);
           }
 
           // Draw falling emoji threats
