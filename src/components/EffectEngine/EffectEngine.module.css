@@ -311,3 +311,238 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
+
+/* ─── Onboarding Instruction HUD Card ─── */
+
+.onboardingCard {
+  background: rgba(10, 10, 18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  padding: 3rem 2.5rem;
+  max-width: 680px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.75rem;
+  box-shadow: 
+    0 30px 60px rgba(0, 0, 0, 0.8),
+    0 0 50px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+}
+
+.onboardingSub {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+}
+
+.instructionBox {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 16px;
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.instructionTitle {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.instructionList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.instructionStep {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: left;
+}
+
+.stepNum {
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 0.95rem;
+  opacity: 0.9;
+}
+
+.stepText {
+  flex: 1;
+}
+
+.onboardingGestureRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-family: monospace;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  padding-top: 1rem;
+  margin-top: 0.25rem;
+}
+
+.gestureHeader {
+  font-weight: 700;
+  opacity: 0.6;
+}
+
+.gestureDetails {
+  font-weight: 600;
+}
+
+/* ─── Floating Help Toggle Button ─── */
+
+.helpToggleButton {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 25;
+  padding: 0.5rem 1.25rem;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fff;
+  background: rgba(20, 20, 31, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.25s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
+
+.helpToggleButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.helpToggleButton:active {
+  transform: translateY(1px);
+}
+
+/* ─── Help Overlay Modal ─── */
+
+.helpOverlayModal {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.helpOverlayBackdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(15px);
+  cursor: pointer;
+}
+
+.helpOverlayContent {
+  position: relative;
+  background: rgba(12, 12, 22, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  padding: 3rem 2.5rem;
+  max-width: 620px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.5rem;
+  box-shadow: 
+    0 30px 60px rgba(0, 0, 0, 0.9),
+    0 0 40px rgba(255, 255, 255, 0.05);
+  animation: modalScaleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes modalScaleUp {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.closeHelpButton {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem;
+  transition: color 0.2s ease;
+}
+
+.closeHelpButton:hover {
+  color: #fff;
+}
+
+.helpOverlayTitle {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.helpPrompt {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: -0.5rem;
+  font-family: monospace;
+}
+
+.closeHelpActionBtn {
+  width: 100%;
+  padding: 1rem 2rem;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  color: #000;
+  font-family: 'Space Grotesk', sans-serif;
+  text-transform: uppercase;
+  transition: transform 0.2s, filter 0.2s;
+  margin-top: 0.5rem;
+}
+
+.closeHelpActionBtn:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.1);
+}
+
+.closeHelpActionBtn:active {
+  transform: translateY(1px);
+}
+

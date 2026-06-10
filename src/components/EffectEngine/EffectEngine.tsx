@@ -2,9 +2,50 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useHandTracking, HandSignals } from '../../hooks/useHandTracking';
-import { EffectConfig, PALETTES, EFFECT_META, PaletteColors } from '../../lib/vfx-schema';
+import { EffectConfig, EffectType, PALETTES, EFFECT_META, PaletteColors } from '../../lib/vfx-schema';
 import { VfxEffect } from '../../lib/effects/types';
 import styles from './EffectEngine.module.css';
+
+// Detailed instructions for each camera game engine type
+const INSTRUCTION_DETAILS: Record<EffectType, { title: string; steps: string[]; gesture: string }> = {
+  fire_magic: {
+    title: "Fire Magic Controls",
+    gesture: "✊ Fist = Charge Flame  ·  🖐️ Open = Erupt / Flamethrower",
+    steps: [
+      "Show your hands to the camera to bind the plasma field.",
+      "Make a tight fist to magnetically condense and charge plasma in your palm.",
+      "Release your fist to detonate a wild additive explosion.",
+      "With the flamethrower prompt, point your hand to direct streams from your knuckles."
+    ]
+  },
+  particle_nebula: {
+    title: "Particle Nebula Controls",
+    gesture: "✊ Fist = Gather Stars  ·  🖐️ Open = Detonate Swarm",
+    steps: [
+      "Let the cosmic swarm flow dynamically using curl noise around your palms.",
+      "Make a fist to contract stars into a compact orbital shell.",
+      "Open your hand quickly to detonate and scatter the galaxy outward."
+    ]
+  },
+  glitch_tiles: {
+    title: "Glitch Tiles Controls",
+    gesture: "🤏 Pinch = Grab Card  ·  🖐️ Fling = Throw & Scatter",
+    steps: [
+      "Pinch your index finger and thumb to grab a floating glass tile.",
+      "Move your hand to drag, slide, and position cards in 3D geometry.",
+      "Make a quick sweep or swipe gesture (fling) to scatter cards into portals."
+    ]
+  },
+  light_ribbons: {
+    title: "Light Ribbons Controls",
+    gesture: "🤏 Pinch = Draw Line  ·  🔄 Circle = Snap Rune Ring",
+    steps: [
+      "Pinch your index finger and thumb to activate the neon drawing brush.",
+      "Drag your hand through the air to sketch volumetric ribbons of light.",
+      "Draw a rough loop and close it to compile a rotating holographic Rune Ring."
+    ]
+  }
+};
 
 // ─── Session States (§4) ────────────────────────────────────────
 // "Transitions are rare (seconds apart), so session state IS allowed
@@ -56,6 +97,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
   const [showGestureHint, setShowGestureHint] = useState(true);
   const [toastText, setToastText] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -432,19 +474,43 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
       {/* ── Pre-Permission Screen (§4.1) */}
       {session === 'prePermission' && (
         <div className={styles.prePermission}>
-          <div className={styles.promptTitle} style={{ color: palette.primary }}>
-            ⚡ {config.prompt}
+          <div className={styles.onboardingCard}>
+            <span className={styles.onboardingSub}>CALIBRATING ENGINE</span>
+            
+            <div className={styles.promptTitle} style={{ color: palette.primary }}>
+              ⚡ {config.prompt}
+            </div>
+
+            <div className={styles.instructionBox}>
+              <h3 className={styles.instructionTitle} style={{ borderBottomColor: `${palette.primary}20` }}>
+                {INSTRUCTION_DETAILS[config.effect].title}
+              </h3>
+              <ul className={styles.instructionList}>
+                {INSTRUCTION_DETAILS[config.effect].steps.map((step, i) => (
+                  <li key={i} className={styles.instructionStep}>
+                    <span className={styles.stepNum} style={{ color: palette.primary }}>0{i + 1}</span>
+                    <span className={styles.stepText}>{step}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className={styles.onboardingGestureRow} style={{ color: palette.primary }}>
+                <span className={styles.gestureHeader}>GESTURES:</span>
+                <span className={styles.gestureDetails}>{INSTRUCTION_DETAILS[config.effect].gesture}</span>
+              </div>
+            </div>
+
+            <p className={styles.trustCopy}>
+              your camera feed never leaves this device — all tracking runs in your browser
+            </p>
+            
+            <button
+              className={styles.enableButton}
+              style={{ background: palette.primary, boxShadow: `0 0 30px ${palette.glow}40` }}
+              onClick={requestCamera}
+            >
+              Enable Camera & Begin
+            </button>
           </div>
-          <p className={styles.trustCopy}>
-            your camera feed never leaves this device — all tracking runs in your browser
-          </p>
-          <button
-            className={styles.enableButton}
-            style={{ background: palette.primary, boxShadow: `0 0 30px ${palette.glow}40` }}
-            onClick={requestCamera}
-          >
-            Enable camera to begin
-          </button>
         </div>
       )}
 
@@ -538,6 +604,57 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
           <span ref={perfEntitiesRef}>Ent: --</span>
           <span ref={perfHandsRef}>Hands: --</span>
           <span ref={perfDroppedRef}>Drop: 0</span>
+        </div>
+      )}
+
+      {/* ── Help Toggle Button */}
+      {(session === 'live' || session === 'idle' || session === 'awaitingHands') && (
+        <button 
+          className={styles.helpToggleButton}
+          onClick={() => setShowHelp(prev => !prev)}
+          title="Show Gestures & Controls"
+        >
+          ? Controls
+        </button>
+      )}
+
+      {/* ── Help Overlay Modal */}
+      {showHelp && (
+        <div className={styles.helpOverlayModal}>
+          <div className={styles.helpOverlayBackdrop} onClick={() => setShowHelp(false)} />
+          <div className={styles.helpOverlayContent}>
+            <button className={styles.closeHelpButton} onClick={() => setShowHelp(false)}>×</button>
+            <span className={styles.onboardingSub}>TRANSMISSION MANUAL</span>
+            <h2 className={styles.helpOverlayTitle} style={{ color: palette.primary }}>
+              {INSTRUCTION_DETAILS[config.effect].title}
+            </h2>
+            <div className={styles.helpPrompt}>
+              Current Prompt: <span style={{ color: '#fff' }}>"{config.prompt}"</span>
+            </div>
+            
+            <div className={styles.instructionBox} style={{ background: 'rgba(255,255,255,0.01)' }}>
+              <ul className={styles.instructionList}>
+                {INSTRUCTION_DETAILS[config.effect].steps.map((step, i) => (
+                  <li key={i} className={styles.instructionStep}>
+                    <span className={styles.stepNum} style={{ color: palette.primary }}>0{i + 1}</span>
+                    <span className={styles.stepText}>{step}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className={styles.onboardingGestureRow} style={{ color: palette.primary, background: 'rgba(255,255,255,0.03)', borderTopStyle: 'solid' }}>
+                <span className={styles.gestureHeader}>GESTURES:</span>
+                <span className={styles.gestureDetails}>{INSTRUCTION_DETAILS[config.effect].gesture}</span>
+              </div>
+            </div>
+
+            <button 
+              className={styles.closeHelpActionBtn}
+              style={{ background: palette.primary }}
+              onClick={() => setShowHelp(false)}
+            >
+              Resume Experience
+            </button>
+          </div>
         </div>
       )}
     </div>
