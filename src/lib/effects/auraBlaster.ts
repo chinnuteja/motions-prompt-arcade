@@ -138,10 +138,34 @@ export class AuraBlasterEffect implements VfxEffect {
 
       if (this.pType[i] === 0) {
         // Ambient particle: gets sucked into charging hands
-        let sucked = false;
+        let affected = false;
         for (let hi = 0; hi < 2; hi++) {
-          if (this.charge[hi] > 0 && !this.firing[hi]) {
-            const hand = hands[hi]!;
+          const hand = hands[hi];
+          if (!hand) continue;
+
+          if (this.firing[hi]) {
+            // Beam violently blows particles away and supercharges them!
+            const basis = this.getHandBasis(hand);
+            const dx = this.px[i] - basis.palmX;
+            const dy = this.py[i] - basis.palmY;
+            
+            // If particle is in front of the hand
+            const dotForward = dx * basis.forwardX + dy * basis.forwardY;
+            if (dotForward > -100) {
+              const dist = Math.hypot(dx, dy) || 1;
+              const push = (150000 / (dist + 50)) * this.charge[hi];
+              
+              // Push strongly forward, and slightly outward from the beam core
+              this.pvx[i] += basis.forwardX * push * dt + (dx / dist) * push * 0.3 * dt;
+              this.pvy[i] += basis.forwardY * push * dt + (dy / dist) * push * 0.3 * dt;
+              
+              // Supercharge the particle
+              this.life[i] = Math.max(this.life[i], 0.8);
+              this.pType[i] = 1; // Convert to blast spark
+              affected = true;
+            }
+          } else if (this.charge[hi] > 0) {
+            // Ambient suck-in during charge
             const dx = hand.palm.x - this.px[i];
             const dy = hand.palm.y - this.py[i];
             const dist = Math.hypot(dx, dy) || 1;
@@ -149,14 +173,14 @@ export class AuraBlasterEffect implements VfxEffect {
               const pull = (4000 / dist) * this.charge[hi];
               this.pvx[i] += (dx / dist) * pull * dt;
               this.pvy[i] += (dy / dist) * pull * dt;
-              sucked = true;
+              affected = true;
             }
             if (dist < 30) {
-              this.life[i] = 0; // Consume
+              this.life[i] = 0; // Consume into the sphere
             }
           }
         }
-        if (!sucked) {
+        if (!affected) {
           // Slow drift
           this.pvx[i] += (Math.random() - 0.5) * 100 * dt;
           this.pvy[i] += (Math.random() - 0.5) * 100 * dt;
