@@ -78,7 +78,7 @@ export class ParticleNebulaEffect implements VfxEffect {
   // Smoothed formation engagement 0→1 (eases in/out, drives gracefulRelease dissolve)
   private formEngage = 0;
   private formMode: NebulaFormationMode = 'none';
-  private formHand = 0;
+  private activeHands: number[] = [];
   private formTime = 0;
   private primaryColor = '#ffffff';
 
@@ -230,33 +230,47 @@ export class ParticleNebulaEffect implements VfxEffect {
     const tracked1 = !!(h1 && h1.track !== 'lost');
 
     let nextMode: NebulaFormationMode = 'none';
-    let nextHand = 0;
+    let nextHands: number[] = [];
 
     if (tracked0 && tracked1 && h0 && h1) {
       const palmDist = Math.hypot(h1.palm.x - h0.palm.x, h1.palm.y - h0.palm.y);
-      if (palmDist < 430 && palmDist > 70) nextMode = 'galaxy';
-    }
-
-    if (nextMode === 'none') {
-      for (let hi = 0; hi < 2; hi++) {
-        const h = hands[hi];
-        if (!h || h.track === 'lost') continue;
-        if (h.pinching) {
-          nextMode = 'blackHole';
-          nextHand = hi;
-          break;
-        }
-        if (h.openness > 0.72 && h.landmarks.length >= 21) {
-          nextMode = 'constellation';
-          nextHand = hi;
-          break;
-        }
+      if (palmDist < 430 && palmDist > 70) {
+        nextMode = 'galaxy';
+        nextHands = [0, 1];
       }
     }
 
-    if (nextMode !== this.formMode || nextHand !== this.formHand) {
+    if (nextMode === 'none') {
+      let pinchingHands: number[] = [];
+      let constellationHands: number[] = [];
+
+      for (let hi = 0; hi < 2; hi++) {
+        const h = hands[hi];
+        if (!h || h.track === 'lost') continue;
+        if (h.pinching) pinchingHands.push(hi);
+        if (h.openness > 0.72 && h.landmarks.length >= 21) constellationHands.push(hi);
+      }
+
+      if (pinchingHands.length > 0) {
+        nextMode = 'blackHole';
+        nextHands = pinchingHands;
+      } else if (constellationHands.length > 0) {
+        nextMode = 'constellation';
+        nextHands = constellationHands;
+      }
+    }
+
+    let handsChanged = false;
+    if (this.activeHands.length !== nextHands.length) handsChanged = true;
+    else {
+      for (let i = 0; i < nextHands.length; i++) {
+        if (this.activeHands[i] !== nextHands[i]) handsChanged = true;
+      }
+    }
+
+    if (nextMode !== this.formMode || handsChanged) {
       this.formMode = nextMode;
-      this.formHand = nextHand;
+      this.activeHands = nextHands;
       this.formTime = 0;
     }
     this.formTime += dt;
@@ -295,8 +309,9 @@ export class ParticleNebulaEffect implements VfxEffect {
           this.vx[i] *= expDamp(target.damping, dt);
           this.vy[i] *= expDamp(target.damping, dt);
 
-          if (this.formMode === 'blackHole') {
-            const hand = hands[this.formHand];
+          if (this.formMode === 'blackHole' && this.activeHands.length > 0) {
+            const handIndex = this.activeHands[i % this.activeHands.length];
+            const hand = hands[handIndex];
             if (hand) {
               const dx = this.px[i] - hand.indexTip.x;
               const dy = this.py[i] - hand.indexTip.y;
@@ -451,8 +466,11 @@ export class ParticleNebulaEffect implements VfxEffect {
     i: number,
     hands: [HandSignals | null, HandSignals | null],
   ): NebulaTarget | null {
+    if (this.activeHands.length === 0) return null;
+
     if (this.formMode === 'blackHole') {
-      const hand = hands[this.formHand];
+      const handIndex = this.activeHands[i % this.activeHands.length];
+      const hand = hands[handIndex];
       if (!hand || hand.track === 'lost') return null;
       const speed = Math.hypot(hand.indexVel.x, hand.indexVel.y);
       let ux = hand.indexVel.x;
@@ -485,7 +503,8 @@ export class ParticleNebulaEffect implements VfxEffect {
     }
 
     if (this.formMode === 'constellation') {
-      const hand = hands[this.formHand];
+      const handIndex = this.activeHands[i % this.activeHands.length];
+      const hand = hands[handIndex];
       if (!hand || hand.track === 'lost' || hand.landmarks.length < 21) return null;
       const tips = [4, 8, 12, 16, 20];
       const segmentCount = tips.length * 2;
@@ -572,55 +591,59 @@ export class ParticleNebulaEffect implements VfxEffect {
     this.trailCtx.lineCap = 'round';
 
     if (this.formMode === 'blackHole') {
-      const hand = hands[this.formHand];
-      if (!hand || hand.track === 'lost') { this.trailCtx.restore(); return; }
-      this.trailCtx.globalAlpha = 0.5 * a;
-      this.trailCtx.lineWidth = 2;
-      for (let r = 48; r <= 220; r += 42) {
+      for (const hi of this.activeHands) {
+        const hand = hands[hi];
+        if (!hand || hand.track === 'lost') continue;
+        this.trailCtx.globalAlpha = 0.5 * a;
+        this.trailCtx.lineWidth = 2;
+        for (let r = 48; r <= 220; r += 42) {
+          this.trailCtx.beginPath();
+          this.trailCtx.ellipse(
+            hand.indexTip.x,
+            hand.indexTip.y,
+            r,
+            r * 0.18,
+            this.formTime * 1.8 + r * 0.01,
+            0,
+            Math.PI * 2,
+          );
+          this.trailCtx.stroke();
+        }
+        this.trailCtx.globalAlpha = 0.85 * a;
         this.trailCtx.beginPath();
-        this.trailCtx.ellipse(
-          hand.indexTip.x,
-          hand.indexTip.y,
-          r,
-          r * 0.18,
-          this.formTime * 1.8 + r * 0.01,
-          0,
-          Math.PI * 2,
-        );
+        this.trailCtx.arc(hand.indexTip.x, hand.indexTip.y, 18 + Math.sin(this.formTime * 8) * 3, 0, Math.PI * 2);
         this.trailCtx.stroke();
       }
-      this.trailCtx.globalAlpha = 0.85 * a;
-      this.trailCtx.beginPath();
-      this.trailCtx.arc(hand.indexTip.x, hand.indexTip.y, 18 + Math.sin(this.formTime * 8) * 3, 0, Math.PI * 2);
-      this.trailCtx.stroke();
     } else if (this.formMode === 'constellation') {
-      const hand = hands[this.formHand];
-      if (!hand || hand.track === 'lost' || hand.landmarks.length < 21) { this.trailCtx.restore(); return; }
-      const tips = [4, 8, 12, 16, 20];
-      this.trailCtx.globalAlpha = 0.42 * a;
-      this.trailCtx.lineWidth = 1.6;
-      this.trailCtx.beginPath();
-      for (let i = 0; i < tips.length; i++) {
-        const p = hand.landmarks[tips[i]];
-        if (i === 0) this.trailCtx.moveTo(p.x, p.y);
-        else this.trailCtx.lineTo(p.x, p.y);
-      }
-      const first = hand.landmarks[tips[0]];
-      this.trailCtx.lineTo(first.x, first.y);
-      this.trailCtx.stroke();
-
-      this.trailCtx.globalAlpha = 0.32 * a;
-      for (const ti of tips) {
-        const tip = hand.landmarks[ti];
-        let dx = tip.x - hand.palm.x;
-        let dy = tip.y - hand.palm.y;
-        const len = Math.hypot(dx, dy) || 1;
-        dx /= len;
-        dy /= len;
+      for (const hi of this.activeHands) {
+        const hand = hands[hi];
+        if (!hand || hand.track === 'lost' || hand.landmarks.length < 21) continue;
+        const tips = [4, 8, 12, 16, 20];
+        this.trailCtx.globalAlpha = 0.42 * a;
+        this.trailCtx.lineWidth = 1.6;
         this.trailCtx.beginPath();
-        this.trailCtx.moveTo(tip.x, tip.y);
-        this.trailCtx.lineTo(tip.x + dx * hand.scale * 2.2, tip.y + dy * hand.scale * 2.2);
+        for (let i = 0; i < tips.length; i++) {
+          const p = hand.landmarks[tips[i]];
+          if (i === 0) this.trailCtx.moveTo(p.x, p.y);
+          else this.trailCtx.lineTo(p.x, p.y);
+        }
+        const first = hand.landmarks[tips[0]];
+        this.trailCtx.lineTo(first.x, first.y);
         this.trailCtx.stroke();
+
+        this.trailCtx.globalAlpha = 0.32 * a;
+        for (const ti of tips) {
+          const tip = hand.landmarks[ti];
+          let dx = tip.x - hand.palm.x;
+          let dy = tip.y - hand.palm.y;
+          const len = Math.hypot(dx, dy) || 1;
+          dx /= len;
+          dy /= len;
+          this.trailCtx.beginPath();
+          this.trailCtx.moveTo(tip.x, tip.y);
+          this.trailCtx.lineTo(tip.x + dx * hand.scale * 2.2, tip.y + dy * hand.scale * 2.2);
+          this.trailCtx.stroke();
+        }
       }
     } else if (this.formMode === 'galaxy') {
       const h0 = hands[0];
