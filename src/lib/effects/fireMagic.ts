@@ -157,11 +157,29 @@ export class FireMagicEffect implements VfxEffect {
         this.charge[hi] = Math.max(0, this.charge[hi] - dt * 2);
       }
 
-      // Flamethrower mode
-      if (isOpen && this.config.params.eruption === 'flamethrower' && !eruptingThisFrame) {
-        // A tight ribbon of sources along the knuckles, launched in the hand's
-        // forward direction and sheared by wrist twist.
-        for (const src of this.handContourSources(hand, basis, 1.0, 1350)) activeSources.push(src);
+      // Continuous fire logic
+      if (isOpen) {
+        if (this.config.params.eruption === 'flamethrower' && !eruptingThisFrame) {
+          // Tight ribbon of sources along the knuckles
+          for (const src of this.handContourSources(hand, basis, 1.0, 1350)) activeSources.push(src);
+        } else if (this.config.params.eruption === 'burst' && !eruptingThisFrame) {
+          // Fingertip jets! Fire shoots continuously from fingertips
+          const fingertips = [8, 12, 16, 20];
+          for (const ti of fingertips) {
+            const lm = hand.landmarks[ti];
+            if (lm) {
+              activeSources.push({
+                x: lm.x,
+                y: lm.y,
+                h: 0.85,
+                vx: basis.forwardX * 600 + (Math.random()-0.5)*150 + hand.indexVel.x * 0.4,
+                vy: basis.forwardY * 600 + (Math.random()-0.5)*150 + hand.indexVel.y * 0.4,
+                spread: 14,
+                radius: 0.7,
+              });
+            }
+          }
+        }
       }
 
       // Pilot flames (idle)

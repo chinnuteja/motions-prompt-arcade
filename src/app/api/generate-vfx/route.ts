@@ -46,6 +46,7 @@ CRITICAL RULES:
 2. Ensure the JSON exactly matches the parameters for the chosen effect.
 3. 'intensity' must be exactly 1 (low), 2 (medium), or 3 (high).
 4. 'v' must be exactly 1.
+5. If the user asks for fire/flames WITHOUT explicitly specifying a color, ALWAYS use the 'ember' (orange) palette.
 
 JSON SCHEMA EXAMPLES:
 

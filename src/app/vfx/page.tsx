@@ -81,7 +81,7 @@ export default function VfxLandingPage() {
       id: "fire_magic",
       title: "Fire Magic",
       description: "Fluid plasma physics with hand-contour mapping, twist shear, and explosive eruptions.",
-      prompt: "Give me blue ghost fire I can charge in my fist and blast like a flamethrower",
+      prompt: "Give me intense orange fire I can charge in my fist and blast like a flamethrower",
       gradient: "linear-gradient(135deg, #ff4e00, #ec9f05)"
     },
     {
