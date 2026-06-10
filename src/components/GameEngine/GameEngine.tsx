@@ -165,8 +165,9 @@ export function GameEngine({ config }: GameEngineProps) {
   // TRUE 60FPS GAME LOOP (Bypasses React Render)
   // ==========================================
   const statusRef = useRef(gameState.status);
-  statusRef.current = gameState.status;
-
+  useEffect(() => {
+    statusRef.current = gameState.status;
+  }, [gameState.status]);
   useEffect(() => {
     if (gameState.status !== 'PLAYING') return;
 
