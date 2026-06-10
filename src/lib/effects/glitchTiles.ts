@@ -128,7 +128,6 @@ export class GlitchTilesEffect implements VfxEffect {
   private formationN = 0;
   private shatterCooldown = 0;
   private lastRamp = 0;
-  private circleSpinAngle = 0;
 
   // Quality tiers (one-way)
   private useShadow = true;
@@ -249,16 +248,6 @@ export class GlitchTilesEffect implements VfxEffect {
       this.formationTime = 0;
     }
     this.formationTime += dt;
-    if (this.formationMode === 'circle' && hands[0] && hands[1]) {
-      const dx = hands[1].indexTip.x - hands[0].indexTip.x;
-      const dy = hands[1].indexTip.y - hands[0].indexTip.y;
-      const handDist = Math.hypot(dx, dy);
-      const spinFactor = clamp((handDist - 80) / 250, 0, 1.5);
-      const spinSpeed = spinFactor * 2.5;
-      this.circleSpinAngle += spinSpeed * dt;
-    } else if (this.formationMode !== 'circle') {
-      this.circleSpinAngle *= expDamp(2, dt);
-    }
     const targetFormationAlpha = intent.mode === 'none' ? 0 : ramp;
     this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(9, dt));
 
@@ -515,7 +504,7 @@ export class GlitchTilesEffect implements VfxEffect {
 
       if (bothFist) return { mode: 'pack', handIndex: 0 };
       if (bothOpen && indexDist > 130) return { mode: 'line', handIndex: 0 };
-      if (bothIndex && indexDist > 45) return { mode: 'circle', handIndex: 0 };
+      if (bothIndex && indexDist > 130) return { mode: 'circle', handIndex: 0 };
     }
 
     for (let hi = 0; hi < 2; hi++) {
@@ -553,8 +542,8 @@ export class GlitchTilesEffect implements VfxEffect {
       const dx = h1.indexTip.x - h0.indexTip.x;
       const dy = h1.indexTip.y - h0.indexTip.y;
       const handDist = Math.hypot(dx, dy) || 1;
-      const angle = (slot / n) * Math.PI * 2 - Math.PI / 2 + this.circleSpinAngle;
-      const r = clamp((handDist - 60) * 0.55, 15, 260);
+      const angle = (slot / n) * Math.PI * 2 - Math.PI / 2;
+      const r = clamp(handDist * 0.45, 105, 250);
       const x = cx + Math.cos(angle) * r;
       const y = cy + Math.sin(angle) * r;
       const tangentRot = angle + Math.PI / 2;
@@ -848,7 +837,7 @@ export class GlitchTilesEffect implements VfxEffect {
       const cx = (h0.indexTip.x + h1.indexTip.x) * 0.5;
       const cy = (h0.indexTip.y + h1.indexTip.y) * 0.5;
       const dist = Math.hypot(h1.indexTip.x - h0.indexTip.x, h1.indexTip.y - h0.indexTip.y);
-      const r = clamp((dist - 60) * 0.55, 15, 260);
+      const r = clamp(dist * 0.45, 105, 250);
       ctx.strokeStyle = `rgba(255,255,255,${0.62 * a})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -857,7 +846,7 @@ export class GlitchTilesEffect implements VfxEffect {
       ctx.globalAlpha = 0.35 * a;
       ctx.strokeStyle = this.glow;
       for (let i = 0; i < this.formationN; i++) {
-        const ang = (i / Math.max(1, this.formationN)) * Math.PI * 2 - Math.PI / 2 + this.circleSpinAngle;
+        const ang = (i / Math.max(1, this.formationN)) * Math.PI * 2 - Math.PI / 2;
         ctx.beginPath();
         ctx.moveTo(cx + Math.cos(ang) * (r - 10), cy + Math.sin(ang) * (r - 10));
         ctx.lineTo(cx + Math.cos(ang) * (r + 10), cy + Math.sin(ang) * (r + 10));
