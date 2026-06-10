@@ -110,7 +110,7 @@ export class ParticleNebulaEffect implements VfxEffect {
     this.role = new Uint8Array(this.count);
     this.slotPhase = new Float32Array(this.count);
 
-    // Role assignment: ~6% anchors (plexus), ~55% formation, rest ambient dust.
+    // Role assignment: ~6% anchors (plexus), the rest formation. No ambient dust to keep the art neat.
     const anchorCount = Math.min(130, Math.floor(this.count * 0.06));
     for (let i = 0; i < this.count; i++) {
       this.px[i] = Math.random() * this.w;
@@ -123,10 +123,8 @@ export class ParticleNebulaEffect implements VfxEffect {
       if (i < anchorCount) {
         this.role[i] = ROLE_ANCHOR;
         this.anchorIdx.push(i);
-      } else if ((i % 20) < 11) {
-        this.role[i] = ROLE_FORMATION;
       } else {
-        this.role[i] = ROLE_AMBIENT;
+        this.role[i] = ROLE_FORMATION;
       }
     }
 
