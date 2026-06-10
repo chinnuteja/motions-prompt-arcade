@@ -24,8 +24,8 @@ export async function POST(req: Request) {
 Your job is to take a user's plain-English description of a visual effect and map it EXACTLY to a JSON EffectConfig object.
 
 You have access to these specific Effects:
-- 'light_ribbons': Draw flowing ribbons of light in the air with your index finger.
-  -> params: brush ("ribbon"|"lightning"|"smoke"), persistence ("lasting"|"fading"), pinchAction ("penDown"|"widthControl")
+- 'aura_blaster': Charge massive glowing energy spheres in your fists, open hands to blast plasma beams.
+  -> params: beamStyle ("laser"|"plasma"|"electric"), chargeEffect ("implosion"|"vortex")
 - 'particle_nebula': Particles orbit your palm, explode when you open your hand.
   -> params: motion ("orbit"|"stream"|"swarm"), openHandAction ("explode"|"release"), trail ("short"|"long")
 - 'glitch_tiles': Point to warp the camera feed into glitchy tiles, pinch to grab and throw them.
@@ -49,17 +49,16 @@ CRITICAL RULES:
 
 JSON SCHEMA EXAMPLES:
 
-User: "Let me draw with fire"
+User: "Let me fire huge electric beams from my hands"
 {
   "v": 1,
-  "effect": "light_ribbons",
-  "palette": "ember",
-  "intensity": 2,
-  "prompt": "Let me draw with fire",
+  "effect": "aura_blaster",
+  "palette": "neon",
+  "intensity": 3,
+  "prompt": "Let me fire huge electric beams from my hands",
   "params": {
-    "brush": "smoke",
-    "persistence": "lasting",
-    "pinchAction": "penDown"
+    "beamStyle": "electric",
+    "chargeEffect": "implosion"
   }
 }
 

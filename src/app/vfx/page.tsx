@@ -99,11 +99,11 @@ export default function VfxLandingPage() {
       gradient: "linear-gradient(135deg, #ffffff, #555555)"
     },
     {
-      id: "light_ribbons",
-      title: "Light Ribbons",
-      description: "Draw volumetric 3D ribbons of neon light. Close the loop to spawn mathematical holographic Rune Rings.",
-      prompt: "Let me draw with hot pink and cyan neon lightning",
-      gradient: "linear-gradient(135deg, #ff00ea, #00f0ff)"
+      id: "aura_blaster",
+      title: "Aura Blaster",
+      description: "Charge massive glowing energy spheres in your fists and blast screen-spanning plasma beams from your palms.",
+      prompt: "Let me fire huge electric beams from my hands",
+      gradient: "linear-gradient(135deg, #00ffaa, #00f0ff)"
     }
   ];
 
@@ -223,11 +223,12 @@ export default function VfxLandingPage() {
                             <line x1="12" y1="22.08" x2="12" y2="12" />
                           </svg>
                         )}
-                        {engine.id === 'light_ribbons' && (
+                        {engine.id === 'aura_blaster' && (
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.cardIcon}>
-                            <path d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8-8-3.6-8-8z" />
-                            <path d="M12 2a10 10 0 0 1 10 10M12 22A10 10 0 0 1 2 12" opacity="0.5" />
-                            <path d="M12 8a4 4 0 0 1 4 4M12 16a4 4 0 0 1-4-4" />
+                            <circle cx="12" cy="12" r="10" opacity="0.4" />
+                            <circle cx="12" cy="12" r="6" opacity="0.7" />
+                            <circle cx="12" cy="12" r="2" fill="currentColor" />
+                            <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
                           </svg>
                         )}
                       </div>

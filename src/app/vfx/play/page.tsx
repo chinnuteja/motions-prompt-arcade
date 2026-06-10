@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { EffectConfig, decodeEffectConfig } from '../../../lib/vfx-schema';
 import { EffectEngine } from '../../../components/EffectEngine/EffectEngine';
-import { LightRibbonsEffect } from '../../../lib/effects/lightRibbons';
+import { AuraBlasterEffect } from '../../../lib/effects/auraBlaster';
 import { ParticleNebulaEffect } from '../../../lib/effects/particleNebula';
 import { GlitchTilesEffect } from '../../../lib/effects/glitchTiles';
 import { FireMagicEffect } from '../../../lib/effects/fireMagic';
@@ -35,8 +35,8 @@ function VfxPlayer() {
     if (!config) return null;
     
     switch (config.effect) {
-      case 'light_ribbons':
-        return new LightRibbonsEffect();
+      case 'aura_blaster':
+        return new AuraBlasterEffect();
       case 'particle_nebula':
         return new ParticleNebulaEffect(); 
       case 'glitch_tiles':

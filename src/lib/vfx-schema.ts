@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // ─── Effect Types ───────────────────────────────────────────────
 
-export type EffectType = 'glitch_tiles' | 'particle_nebula' | 'light_ribbons' | 'fire_magic';
+export type EffectType = 'glitch_tiles' | 'particle_nebula' | 'aura_blaster' | 'fire_magic';
 
 export type PaletteId = 'neon' | 'ember' | 'vapor' | 'mono' | 'acid' | 'ocean';
 
@@ -29,7 +29,7 @@ export const PALETTES: Record<PaletteId, PaletteColors> = {
 export const EFFECT_META: Record<EffectType, { gestureHint: string; idleBehavior: string }> = {
   glitch_tiles:    { gestureHint: 'pinch to grab a card · fling to ignite', idleBehavior: 'settle' },
   particle_nebula: { gestureHint: 'make a fist to gather the stars', idleBehavior: 'drift' },
-  light_ribbons:   { gestureHint: 'pinch to draw in the air',       idleBehavior: 'fade' },
+  aura_blaster:    { gestureHint: 'fist to charge sphere · open palm to blast beam', idleBehavior: 'fade' },
   fire_magic:      { gestureHint: 'fist to charge the flame · open to erupt', idleBehavior: 'flicker' },
 };
 
@@ -61,12 +61,11 @@ export interface ParticleNebulaConfig extends EffectConfigBase {
   };
 }
 
-export interface LightRibbonsConfig extends EffectConfigBase {
-  effect: 'light_ribbons';
+export interface AuraBlasterConfig extends EffectConfigBase {
+  effect: 'aura_blaster';
   params: {
-    brush: 'ribbon' | 'lightning' | 'smoke';
-    persistence: 'fading' | 'lasting';
-    pinchAction: 'penDown' | 'widthControl';
+    beamStyle: 'laser' | 'plasma' | 'electric';
+    chargeEffect: 'implosion' | 'vortex';
   };
 }
 
@@ -82,7 +81,7 @@ export interface FireMagicConfig extends EffectConfigBase {
 export type EffectConfig =
   | GlitchTilesConfig
   | ParticleNebulaConfig
-  | LightRibbonsConfig
+  | AuraBlasterConfig
   | FireMagicConfig;
 
 // ─── Zod Schemas (validation on server + client) ────────────────
@@ -113,16 +112,15 @@ const particleNebulaSchema = z.object({
   }),
 });
 
-const lightRibbonsSchema = z.object({
+const auraBlasterSchema = z.object({
   v: z.literal(1),
-  effect: z.literal('light_ribbons'),
+  effect: z.literal('aura_blaster'),
   palette: z.enum(['neon', 'ember', 'vapor', 'mono', 'acid', 'ocean']),
   intensity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   prompt: z.string(),
   params: z.object({
-    brush: z.enum(['ribbon', 'lightning', 'smoke']),
-    persistence: z.enum(['fading', 'lasting']),
-    pinchAction: z.enum(['penDown', 'widthControl']),
+    beamStyle: z.enum(['laser', 'plasma', 'electric']),
+    chargeEffect: z.enum(['implosion', 'vortex']),
   }),
 });
 
@@ -142,7 +140,7 @@ const fireMagicSchema = z.object({
 export const effectConfigSchema = z.discriminatedUnion('effect', [
   glitchTilesSchema,
   particleNebulaSchema,
-  lightRibbonsSchema,
+  auraBlasterSchema,
   fireMagicSchema,
 ]);
 
@@ -156,16 +154,15 @@ export function validateEffectConfig(data: unknown): EffectConfig | null {
 
 // ─── Default Config (fallback when validation fails) ────────────
 
-export const DEFAULT_EFFECT_CONFIG: LightRibbonsConfig = {
+export const DEFAULT_EFFECT_CONFIG: AuraBlasterConfig = {
   v: 1,
-  effect: 'light_ribbons',
+  effect: 'aura_blaster',
   palette: 'neon',
-  intensity: 2,
-  prompt: 'draw with light',
+  intensity: 3,
+  prompt: 'fire massive plasma beams',
   params: {
-    brush: 'ribbon',
-    persistence: 'fading',
-    pinchAction: 'penDown',
+    beamStyle: 'plasma',
+    chargeEffect: 'implosion',
   },
 };
 

@@ -36,13 +36,13 @@ const INSTRUCTION_DETAILS: Record<EffectType, { title: string; steps: string[]; 
       "Make a quick sweep or swipe gesture (fling) to scatter cards into portals."
     ]
   },
-  light_ribbons: {
-    title: "Light Ribbons Controls",
-    gesture: "🤏 Pinch = Draw Line  ·  🔄 Circle = Snap Rune Ring",
+  aura_blaster: {
+    title: "Aura Blaster Controls",
+    gesture: "✊ Fist = Charge Sphere  ·  🖐️ Open Palm = Fire Beam",
     steps: [
-      "Pinch your index finger and thumb to activate the neon drawing brush.",
-      "Drag your hand through the air to sketch volumetric ribbons of light.",
-      "Draw a rough loop and close it to compile a rotating holographic Rune Ring."
+      "Clench your hand into a fist to charge a massive, glowing energy sphere.",
+      "Hold the fist to build up power and intensity.",
+      "Open your hand (palm forward) to blast a screen-spanning plasma beam!"
     ]
   }
 };
