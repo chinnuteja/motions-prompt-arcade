@@ -94,7 +94,7 @@ export default function VfxLandingPage() {
     {
       id: "glitch_tiles",
       title: "Glitch Tiles",
-      description: "Glass physics that shatters reality into geometry. Magnetically snap into 3D orbs and cinematic portals.",
+      description: "Glass cards that form geometric shapes based on your gestures. Fists form squares, index fingers form lines, open hands swirl.",
       prompt: "Shatter reality into high contrast black and white mirror shards that I can grab",
       gradient: "linear-gradient(135deg, #ffffff, #555555)"
     },

@@ -28,7 +28,7 @@ You have access to these specific Effects:
   -> params: beamStyle ("laser"|"plasma"|"electric"), chargeEffect ("implosion"|"vortex")
 - 'particle_nebula': Particles orbit your palm, explode when you open your hand.
   -> params: motion ("orbit"|"stream"|"swarm"), openHandAction ("explode"|"release"), trail ("short"|"long")
-- 'glitch_tiles': Point to warp the camera feed into glitchy tiles, pinch to grab and throw them.
+- 'glitch_tiles': Glass cards that form geometric shapes based on gestures. Open hands for circle swirl, index fingers for lines, fists for squares.
   -> params: tileShape ("square"|"wide"|"shard"), pullMode ("attract"|"repel"|"vortex"|"fan"), snapBack ("spring"|"drift")
 - 'fire_magic': Real fluid fire on your hands. Fist condenses and charges it, open hand erupts.
   -> params: eruption ("burst"|"flamethrower"), form ("wildfire"|"plasma"), trails ("smoky"|"clean")

@@ -62,6 +62,7 @@ interface Card {
 
   bridgeSlot: number; // slot index in the index↔index tether bridge, -1 if not in formation
   formationSlot: number;
+  formDepth: number;  // 0.6–1.1 orbit depth in circle swirl (front cards bigger); 1 otherwise
 }
 
 type FormationMode = 'none' | 'line' | 'circle' | 'square' | 'pack';
@@ -220,6 +221,7 @@ export class GlitchTilesEffect implements VfxEffect {
         seed: Math.random() * 1000,
         bridgeSlot: -1,
         formationSlot: -1,
+        formDepth: 1,
       });
     }
   }
@@ -249,13 +251,15 @@ export class GlitchTilesEffect implements VfxEffect {
     }
     this.formationTime += dt;
     const targetFormationAlpha = intent.mode === 'none' ? 0 : ramp;
-    this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(9, dt));
+    // Snappy engage so the cards leap into formation the instant the gesture reads.
+    this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(15, dt));
 
     // Reset and assign stable formation slots. Sorting by current screen-space
     // projection keeps cards from crossing through each other on mode changes.
     for (const c of this.cards) {
       c.bridgeSlot = -1;
       c.formationSlot = -1;
+      c.formDepth = 1;
     }
     const forming = this.formationMode !== 'none' && this.formationAlpha > 0.03;
     if (forming) {
@@ -485,6 +489,17 @@ export class GlitchTilesEffect implements VfxEffect {
     return { thumb, index, middle, ring, pinky, extendedCount };
   }
 
+  /** True when both hands are tracked closed fists → drives the two-fist square. */
+  private isTwoFistSquare(hands: [HandSignals | null, HandSignals | null]): boolean {
+    const h0 = hands[0];
+    const h1 = hands[1];
+    return !!(
+      h0 && h1 &&
+      h0.track !== 'lost' && h1.track !== 'lost' &&
+      h0.openness < 0.42 && h1.openness < 0.42
+    );
+  }
+
   private selectFormation(
     hands: [HandSignals | null, HandSignals | null],
     profiles: [FingerProfile | null, FingerProfile | null],
@@ -499,12 +514,19 @@ export class GlitchTilesEffect implements VfxEffect {
       const indexDy = hands[1].indexTip.y - hands[0].indexTip.y;
       const indexDist = Math.hypot(indexDx, indexDy);
       const bothOpen = hands[0].openness > 0.7 && hands[1].openness > 0.7;
-      const bothIndex = !!(p0?.index && p1?.index);
+      // "Two index fingers" = index extended on both, the other fingers mostly curled.
+      const bothIndexOnly = !!(
+        p0?.index && p1?.index &&
+        (p0?.extendedCount ?? 5) <= 2 && (p1?.extendedCount ?? 5) <= 2
+      );
       const bothFist = hands[0].openness < 0.32 && hands[1].openness < 0.32;
 
-      if (bothFist) return { mode: 'pack', handIndex: 0 };
-      if (bothOpen && indexDist > 130) return { mode: 'line', handIndex: 0 };
-      if (bothIndex && indexDist > 130) return { mode: 'circle', handIndex: 0 };
+      // Two closed fists → cards snap into a square framed between the fists.
+      if (bothFist) return { mode: 'square', handIndex: 0 };
+      // Spread OPEN hands → orbiting circle swirl (diameter grows as hands part).
+      if (bothOpen && indexDist > 130) return { mode: 'circle', handIndex: 0 };
+      // Two raised index fingers → straight line along the index↔index axis.
+      if (bothIndexOnly && indexDist > 90) return { mode: 'line', handIndex: 0 };
     }
 
     for (let hi = 0; hi < 2; hi++) {
@@ -512,14 +534,17 @@ export class GlitchTilesEffect implements VfxEffect {
       const profile = profiles[hi];
       if (!hand || hand.track === 'lost' || !profile) continue;
 
-      if (hand.openness < 0.32 && profile.extendedCount <= 1) return { mode: 'pack', handIndex: hi };
+      // A raised index finger ALWAYS wins → straight line. Check it first so a
+      // pointing hand (low openness, index out) never falls into the "pack/bag".
+      const indexUp = profile.index && !profile.middle && !profile.ring && !profile.pinky;
+      if (indexUp || (profile.index && profile.extendedCount <= 2)) return { mode: 'line', handIndex: hi };
 
       const foldedBackFingers = Number(!profile.middle) + Number(!profile.ring) + Number(!profile.pinky);
       const lShape = profile.thumb && profile.index && foldedBackFingers >= 2 && hand.pinch > 0.45;
       if (lShape) return { mode: 'square', handIndex: hi };
 
-      const indexOnly = profile.index && !profile.middle && !profile.ring && !profile.pinky;
-      if (indexOnly || (profile.index && profile.extendedCount <= 2)) return { mode: 'line', handIndex: hi };
+      // Pack/bag is ONLY a true closed fist (no index extended).
+      if (hand.openness < 0.34 && !profile.index) return { mode: 'pack', handIndex: hi };
     }
 
     return { mode: 'none', handIndex: 0 };
@@ -537,17 +562,33 @@ export class GlitchTilesEffect implements VfxEffect {
       const h0 = hands[0];
       const h1 = hands[1];
       if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') return null;
-      const cx = (h0.indexTip.x + h1.indexTip.x) * 0.5;
-      const cy = (h0.indexTip.y + h1.indexTip.y) * 0.5;
+      // Center on the midpoint between the palms (more stable than the fingertips).
+      const cx = (h0.palm.x + h1.palm.x) * 0.5;
+      const cy = (h0.palm.y + h1.palm.y) * 0.5;
       const dx = h1.indexTip.x - h0.indexTip.x;
       const dy = h1.indexTip.y - h0.indexTip.y;
       const handDist = Math.hypot(dx, dy) || 1;
-      const angle = (slot / n) * Math.PI * 2 - Math.PI / 2;
-      const r = clamp(handDist * 0.45, 105, 250);
-      const x = cx + Math.cos(angle) * r;
-      const y = cy + Math.sin(angle) * r;
-      const tangentRot = angle + Math.PI / 2;
-      return { x, y, rot: tangentRot + c.shardRot, stiffness: 230, damping: 30 };
+
+      // Continuous swirl: the whole ring rotates rigidly so cards visibly circle
+      // each other. Each card keeps its stable base angle (orbitAngle) → no slot
+      // wrap-jumps, the entire ring just spins.
+      const swirl = this.formationTime * 1.5;
+      const angle = c.orbitAngle + swirl;
+
+      // Diameter GROWS as the hands separate. Squashed vertically → tilted-ring
+      // perspective so it reads as a 3D orbit, not a flat clock face.
+      const rx = clamp(handDist * 0.55, 95, 360);
+      const ry = rx * 0.52;
+      const x = cx + Math.cos(angle) * rx;
+      const y = cy + Math.sin(angle) * ry;
+
+      // Depth from the ellipse: bottom of the ring (sin>0) is "near" → bigger + on top.
+      const front = (Math.sin(angle) + 1) / 2;     // 0 back … 1 front
+      c.formDepth = 0.6 + 0.55 * front;
+      // Bank slightly with the orbit while staying mostly upright/readable.
+      const rot = Math.cos(angle) * 0.28 + c.shardRot;
+      // Near cards track harder (snappier) than far ones for parallax life.
+      return { x, y, rot, stiffness: 300 + front * 90, damping: 34 };
     }
 
     const hand = hands[this.formationHand];
@@ -589,28 +630,62 @@ export class GlitchTilesEffect implements VfxEffect {
       const px = -uy;
       const py = ux;
       const tt = n === 1 ? 0.5 : slot / (n - 1);
-      const wave = Math.sin(tt * Math.PI * 2 + this.formationTime * 3) * 2.5;
+      // A wave that travels DOWN the line (fast) = the "scrolling" shimmer. The
+      // line itself already follows the index↔index axis, so it's horizontal when
+      // the hands are level and diagonal when one index is raised.
+      const phase = this.formationTime * 4.2 - slot * 0.55;
+      const along = Math.cos(phase) * 11;   // slide along the axis
+      const wave = Math.sin(phase) * 7;     // perpendicular bob
       return {
-        x: ax + dx * tt + px * wave,
-        y: ay + dy * tt + py * wave,
+        x: ax + dx * tt + ux * along + px * wave,
+        y: ay + dy * tt + uy * along + py * wave,
         rot: Math.atan2(uy, ux) + c.shardRot,
-        stiffness: 240,
-        damping: 31,
+        stiffness: 320,
+        damping: 36,
       };
     }
 
     if (this.formationMode === 'square') {
-      const thumb = hand.landmarks[4] ?? hand.palm;
-      const index = hand.landmarks[8] ?? hand.indexTip;
-      let ux = index.x - thumb.x;
-      let uy = index.y - thumb.y;
-      const uLen = Math.hypot(ux, uy) || 1;
-      ux /= uLen; uy /= uLen;
-      const vx = -uy;
-      const vy = ux;
-      const side = clamp(Math.max(uLen * 2.15, hand.scale * 2.3), 180, 360);
-      const cx = (thumb.x + index.x) * 0.5 + ux * side * 0.18;
-      const cy = (thumb.y + index.y) * 0.5 + uy * side * 0.18;
+      // Two-fist square: the fists frame the box. The line between the palms is
+      // one edge, so the square rotates naturally with how you hold your fists.
+      const twoFist = this.isTwoFistSquare(hands);
+      let ux: number;
+      let uy: number;
+      let vx: number;
+      let vy: number;
+      let side: number;
+      let cx: number;
+      let cy: number;
+
+      if (twoFist) {
+        const h0 = hands[0]!;
+        const h1 = hands[1]!;
+        let ex = h1.palm.x - h0.palm.x;
+        let ey = h1.palm.y - h0.palm.y;
+        const eLen = Math.hypot(ex, ey) || 1;
+        ex /= eLen; ey /= eLen;
+        ux = ex; uy = ey;
+        vx = -uy; vy = ux;
+        side = clamp(eLen, 180, 520);
+        // Center the square below the fist-line so the box hangs between the hands.
+        const mx = (h0.palm.x + h1.palm.x) * 0.5;
+        const my = (h0.palm.y + h1.palm.y) * 0.5;
+        cx = mx + vx * side * 0.5;
+        cy = my + vy * side * 0.5;
+      } else {
+        const thumb = hand.landmarks[4] ?? hand.palm;
+        const index = hand.landmarks[8] ?? hand.indexTip;
+        let lux = index.x - thumb.x;
+        let luy = index.y - thumb.y;
+        const uLen = Math.hypot(lux, luy) || 1;
+        lux /= uLen; luy /= uLen;
+        ux = lux; uy = luy;
+        vx = -uy; vy = ux;
+        side = clamp(Math.max(uLen * 2.15, hand.scale * 2.3), 180, 360);
+        cx = (thumb.x + index.x) * 0.5 + ux * side * 0.18;
+        cy = (thumb.y + index.y) * 0.5 + uy * side * 0.18;
+      }
+
       const perSide = Math.max(1, Math.ceil(n / 4));
       const edge = Math.floor(slot / perSide) % 4;
       const local = ((slot % perSide) + 0.5) / perSide;
@@ -623,7 +698,7 @@ export class GlitchTilesEffect implements VfxEffect {
       const x = cx + ux * ox + vx * oy;
       const y = cy + uy * ox + vy * oy;
       const rot = Math.atan2(uy, ux) + (edge % 2 === 0 ? 0 : Math.PI / 2) + c.shardRot;
-      return { x, y, rot, stiffness: 245, damping: 32 };
+      return { x, y, rot, stiffness: twoFist ? 300 : 245, damping: twoFist ? 34 : 32 };
     }
 
     if (this.formationMode === 'pack') {
@@ -694,9 +769,13 @@ export class GlitchTilesEffect implements VfxEffect {
     const scaleY = video.videoHeight / this.h;
     const isShard = this.config.params.tileShape === 'shard';
 
-    // 4. Cards
-    for (const c of this.cards) {
-      const pop = easeOutBack(c.spawnT);
+    // 4. Cards. In circle swirl, draw back→front so near cards overlap far ones
+    //    (sells the 3D orbit). Other modes keep stable spawn order.
+    const drawList = this.formationMode === 'circle' && this.formationAlpha > 0.05
+      ? [...this.cards].sort((a, b) => a.formDepth - b.formDepth)
+      : this.cards;
+    for (const c of drawList) {
+      const pop = easeOutBack(c.spawnT) * c.formDepth;
       if (pop <= 0.01) continue;
 
       ctx.save();
@@ -834,22 +913,29 @@ export class GlitchTilesEffect implements VfxEffect {
       const h0 = this.latestHands[0];
       const h1 = this.latestHands[1];
       if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') { ctx.restore(); return; }
-      const cx = (h0.indexTip.x + h1.indexTip.x) * 0.5;
-      const cy = (h0.indexTip.y + h1.indexTip.y) * 0.5;
+      // Match the tilted orbit the cards actually fly on (palms midpoint, ellipse).
+      const cx = (h0.palm.x + h1.palm.x) * 0.5;
+      const cy = (h0.palm.y + h1.palm.y) * 0.5;
       const dist = Math.hypot(h1.indexTip.x - h0.indexTip.x, h1.indexTip.y - h0.indexTip.y);
-      const r = clamp(dist * 0.45, 105, 250);
-      ctx.strokeStyle = `rgba(255,255,255,${0.62 * a})`;
+      const rx = clamp(dist * 0.55, 95, 360);
+      const ry = rx * 0.52;
+      const swirl = this.formationTime * 1.5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.55 * a})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
       ctx.stroke();
+      // Rotating tick marks ride the swirl so the ring reads as spinning.
       ctx.globalAlpha = 0.35 * a;
       ctx.strokeStyle = this.glow;
-      for (let i = 0; i < this.formationN; i++) {
-        const ang = (i / Math.max(1, this.formationN)) * Math.PI * 2 - Math.PI / 2;
+      const ticks = Math.max(1, this.formationN);
+      for (let i = 0; i < ticks; i++) {
+        const ang = (i / ticks) * Math.PI * 2 + swirl;
+        const ca = Math.cos(ang);
+        const sa = Math.sin(ang);
         ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(ang) * (r - 10), cy + Math.sin(ang) * (r - 10));
-        ctx.lineTo(cx + Math.cos(ang) * (r + 10), cy + Math.sin(ang) * (r + 10));
+        ctx.moveTo(cx + ca * (rx - 10), cy + sa * (ry - 6));
+        ctx.lineTo(cx + ca * (rx + 10), cy + sa * (ry + 6));
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
@@ -858,17 +944,38 @@ export class GlitchTilesEffect implements VfxEffect {
       if (!hand || hand.track === 'lost') { ctx.restore(); return; }
 
       if (this.formationMode === 'square') {
-        const thumb = hand.landmarks[4] ?? hand.palm;
-        const index = hand.landmarks[8] ?? hand.indexTip;
-        let ux = index.x - thumb.x;
-        let uy = index.y - thumb.y;
-        const uLen = Math.hypot(ux, uy) || 1;
-        ux /= uLen; uy /= uLen;
-        const vx = -uy;
-        const vy = ux;
-        const side = clamp(Math.max(uLen * 2.15, hand.scale * 2.3), 180, 360);
-        const cx = (thumb.x + index.x) * 0.5 + ux * side * 0.18;
-        const cy = (thumb.y + index.y) * 0.5 + uy * side * 0.18;
+        let ux: number;
+        let uy: number;
+        let vx: number;
+        let vy: number;
+        let side: number;
+        let cx: number;
+        let cy: number;
+        if (this.isTwoFistSquare(this.latestHands)) {
+          const h0 = this.latestHands[0]!;
+          const h1 = this.latestHands[1]!;
+          let ex = h1.palm.x - h0.palm.x;
+          let ey = h1.palm.y - h0.palm.y;
+          const eLen = Math.hypot(ex, ey) || 1;
+          ex /= eLen; ey /= eLen;
+          ux = ex; uy = ey;
+          vx = -uy; vy = ux;
+          side = clamp(eLen, 180, 520);
+          cx = (h0.palm.x + h1.palm.x) * 0.5 + vx * side * 0.5;
+          cy = (h0.palm.y + h1.palm.y) * 0.5 + vy * side * 0.5;
+        } else {
+          const thumb = hand.landmarks[4] ?? hand.palm;
+          const index = hand.landmarks[8] ?? hand.indexTip;
+          let lux = index.x - thumb.x;
+          let luy = index.y - thumb.y;
+          const uLen = Math.hypot(lux, luy) || 1;
+          lux /= uLen; luy /= uLen;
+          ux = lux; uy = luy;
+          vx = -uy; vy = ux;
+          side = clamp(Math.max(uLen * 2.15, hand.scale * 2.3), 180, 360);
+          cx = (thumb.x + index.x) * 0.5 + ux * side * 0.18;
+          cy = (thumb.y + index.y) * 0.5 + uy * side * 0.18;
+        }
         const corners = [
           { x: cx + ux * -side * 0.5 + vx * -side * 0.5, y: cy + uy * -side * 0.5 + vy * -side * 0.5 },
           { x: cx + ux * side * 0.5 + vx * -side * 0.5, y: cy + uy * side * 0.5 + vy * -side * 0.5 },
