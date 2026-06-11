@@ -1,9 +1,10 @@
 import { VfxEffect } from './types';
 import { HandSignals } from '../../hooks/useHandTracking';
 import { EffectConfig, FireMagicConfig, PALETTES } from '../vfx-schema';
-import { curlNoise, expDamp, buildFireRamp, makeFlameSprite, PingPongCanvas, clamp } from './fxUtils';
+import { curlNoise, expDamp, buildFireRamp, makeFlameSprite, makeGlowSprite, EmberPool, PingPongCanvas, clamp } from './fxUtils';
 
 const BLOB_COUNTS = [220, 300, 380];
+const RING_LIFE = 0.35; // seconds an eruption shockwave ring lives
 
 interface HandBasis {
   palmX: number;
@@ -42,13 +43,24 @@ export class FireMagicEffect implements VfxEffect {
   private vy!: Float32Array;
   private r!: Float32Array;
   private heat!: Float32Array;
-  
+
   // Hand state
   private charge = [0, 0];
   private wasFist = [false, false];
+  private flash = [0, 0];                              // eruption flash decay, per hand
+  private lastBasis: (HandBasis | null)[] = [null, null];
+
+  // One-shot eruption shockwave rings (tiny array, ≤2 live)
+  private rings: { x: number; y: number; age: number; max: number }[] = [];
+
+  // Carried into draw() so trail fade uses the real frame time, not a guess
+  private lastDt = 1 / 60;
 
   // Assets
   private sprites!: { core: HTMLCanvasElement; mid: HTMLCanvasElement; cool: HTMLCanvasElement };
+  private embers!: EmberPool;                          // sparse bright sparks — the crackle of life
+  private emberSprite!: HTMLCanvasElement;
+  private ringColor = 'rgb(255,255,255)';
   private bgTreatment = 'rgba(0,0,0,0)';
 
   init(config: EffectConfig, canvasWidth: number, canvasHeight: number): void {
@@ -63,16 +75,21 @@ export class FireMagicEffect implements VfxEffect {
     const palette = PALETTES[config.palette];
     this.bgTreatment = palette.bgTreatment || 'rgba(0,0,0,0.4)';
     const ramp = buildFireRamp(palette);
-    
+
     // Form: wildfire = larger, softer. plasma = tighter, saturated.
     const isPlasma = this.config.params.form === 'plasma';
     const baseR = isPlasma ? 28 : 42;
-    
+
     this.sprites = {
       core: makeFlameSprite(baseR * 1.5, ramp.core, ramp.mid),
       mid: makeFlameSprite(baseR * 1.8, ramp.mid, ramp.cool),
       cool: makeFlameSprite(baseR * 2.2, ramp.cool, 'rgba(0,0,0,0)'),
     };
+
+    // Embers + shockwave inherit the palette's hottest stop so nothing is hardcoded orange.
+    this.emberSprite = makeGlowSprite(16, ramp.core, 'rgba(0,0,0,0)');
+    this.embers = new EmberPool(140);
+    this.ringColor = ramp.core;
 
     this.cap = BLOB_COUNTS[config.intensity - 1] || 300;
     this.x = new Float32Array(this.cap);
@@ -106,6 +123,7 @@ export class FireMagicEffect implements VfxEffect {
     _video: HTMLVideoElement,
   ): void {
     void _video;
+    this.lastDt = dt;
     const t = performance.now() * 0.001;
     const isPlasma = this.config.params.form === 'plasma';
     const curlStrength = isPlasma ? 260 : 340;
@@ -120,37 +138,46 @@ export class FireMagicEffect implements VfxEffect {
       if (!hand || hand.track === 'lost') {
         this.charge[hi] = 0;
         this.wasFist[hi] = false;
+        this.lastBasis[hi] = null;
         continue;
       }
 
       const basis = this.getHandBasis(hand);
+      this.lastBasis[hi] = basis;
       const isFist = hand.openness < 0.4;
       const isOpen = hand.openness > 0.65;
-      
+
       // CONDENSE
       if (isFist) {
         this.charge[hi] = Math.min(1, this.charge[hi] + dt / 1.2); // charge 0->1 over 1.2s
         this.wasFist[hi] = true;
       }
-      
+
       // ERUPTION burst
       let eruptingThisFrame = false;
       if (isOpen && this.wasFist[hi] && this.charge[hi] > 0.15) {
         eruptingThisFrame = true;
         this.wasFist[hi] = false;
-        
-        const burstMag = 1500 + 1200 * this.charge[hi];
+
+        const chg = this.charge[hi];
+        const burstMag = 1500 + 1200 * chg;
+        // Capture scales with hand size so eruptions read the same near or far from camera.
+        const captureR = Math.max(150, basis.scale * 2.8);
         for (let i = 0; i < this.cap; i++) {
           const dx = this.x[i] - hand.palm.x;
           const dy = this.y[i] - hand.palm.y;
           const dist = Math.hypot(dx, dy) || 1;
-          if (dist < 150) {
+          if (dist < captureR) {
             this.heat[i] = 1;
             const contour = ((dx * basis.sideX + dy * basis.sideY) / Math.max(1, basis.scale)) * 0.35;
             this.vx[i] += basis.forwardX * burstMag + basis.sideX * contour * burstMag + (dx / dist) * burstMag * 0.35;
             this.vy[i] += basis.forwardY * burstMag + basis.sideY * contour * burstMag - burstMag * 0.18;
           }
         }
+        // The payoff: a flash at the palm, an expanding heat ripple, and a shower of sparks.
+        this.flash[hi] = 1;
+        this.pushRing(hand.palm.x, hand.palm.y, basis.scale * 6);
+        this.emberBurst(hand, basis, chg);
         this.charge[hi] = 0;
       } else if (isOpen) {
         this.wasFist[hi] = false;
@@ -172,8 +199,8 @@ export class FireMagicEffect implements VfxEffect {
                 x: lm.x,
                 y: lm.y,
                 h: 0.85,
-                vx: basis.forwardX * 600 + (Math.random()-0.5)*150 + hand.indexVel.x * 0.4,
-                vy: basis.forwardY * 600 + (Math.random()-0.5)*150 + hand.indexVel.y * 0.4,
+                vx: basis.forwardX * 600 + (Math.random() - 0.5) * 150 + hand.indexVel.x * 0.4,
+                vy: basis.forwardY * 600 + (Math.random() - 0.5) * 150 + hand.indexVel.y * 0.4,
                 spread: 14,
                 radius: 0.7,
               });
@@ -202,12 +229,13 @@ export class FireMagicEffect implements VfxEffect {
 
     const damp = expDamp(isPlasma ? 3.7 : 3.0, dt);
     const heatDamp = expDamp(this.config.params.trails === 'smoky' ? 3.2 : 5.6, dt);
-    
+
     // Physics pass
     for (let i = 0; i < this.cap; i++) {
       if (this.heat[i] <= 0.01) {
-        // Respawn dead blob at a random active source
-        if (activeSources.length > 0 && Math.random() < 0.46) {
+        // Respawn dead blob at a random active source. Spawn rate + heat follow the
+        // session `ramp` envelope so the whole field blooms in and fades out gracefully.
+        if (activeSources.length > 0 && Math.random() < 0.46 * ramp) {
           const src = activeSources[Math.floor(Math.random() * activeSources.length)];
           const spread = src.spread;
           this.resetBlob(
@@ -216,9 +244,20 @@ export class FireMagicEffect implements VfxEffect {
             src.y + (Math.random() - 0.5) * spread,
             src.vx * (0.82 + Math.random() * 0.36) + (Math.random() - 0.5) * 180,
             src.vy * (0.82 + Math.random() * 0.36) + (Math.random() - 0.5) * 180,
-            src.h,
+            src.h * ramp,
           );
           this.r[i] *= src.radius;
+          // Occasional bright spark riding off the flame.
+          if (Math.random() < 0.08) {
+            this.embers.spawn(
+              src.x,
+              src.y,
+              src.vx * 0.3 + (Math.random() - 0.5) * 80,
+              src.vy * 0.3 - 40,
+              0.6 + Math.random() * 0.6,
+              3 + Math.random() * 3,
+            );
+          }
         }
         continue;
       }
@@ -226,7 +265,7 @@ export class FireMagicEffect implements VfxEffect {
       // Fist attraction / tangential swirl
       let fistDist = Infinity;
       let fx = 0, fy = 0;
-      
+
       for (let hi = 0; hi < 2; hi++) {
         if (this.charge[hi] > 0) {
           const hand = hands[hi]!;
@@ -234,7 +273,7 @@ export class FireMagicEffect implements VfxEffect {
           const dy = hand.palm.y - this.y[i];
           const d = Math.hypot(dx, dy);
           if (d < fistDist) fistDist = d;
-          
+
           if (d < 180) {
             const capR = Math.max(30, 180 - 150 * this.charge[hi]);
             const pull = (d > capR ? 1000 : -200) * this.charge[hi] * dt;
@@ -258,10 +297,10 @@ export class FireMagicEffect implements VfxEffect {
 
       this.vx[i] *= damp;
       this.vy[i] *= damp;
-      
+
       this.x[i] += this.vx[i] * dt;
       this.y[i] += this.vy[i] * dt;
-      
+
       const speed = Math.hypot(this.vx[i], this.vy[i]);
       const combustion = 1 - heatDamp;
       const fastTear = clamp(speed / 1800, 0, 0.55);
@@ -269,6 +308,32 @@ export class FireMagicEffect implements VfxEffect {
       const condensed = fistDist <= 95 ? 0.45 : 1;
       this.heat[i] -= this.heat[i] * (combustion * condensed + fastTear * dt * 3.0 + edgeLoss);
       if (this.heat[i] < 0.012) this.resetBlob(i);
+    }
+
+    // Decay transient flourishes and advance sparks (buoyant: negative gravity).
+    for (let hi = 0; hi < 2; hi++) {
+      if (this.flash[hi] > 0) this.flash[hi] = Math.max(0, this.flash[hi] - dt * 5);
+    }
+    for (let r = this.rings.length - 1; r >= 0; r--) {
+      this.rings[r].age += dt;
+      if (this.rings[r].age > RING_LIFE) this.rings.splice(r, 1);
+    }
+    this.embers.step(dt, -160, 1.5);
+  }
+
+  private pushRing(x: number, y: number, max: number): void {
+    this.rings.push({ x, y, age: 0, max });
+    if (this.rings.length > 2) this.rings.shift();
+  }
+
+  private emberBurst(hand: HandSignals, basis: HandBasis, charge: number): void {
+    const n = Math.floor(30 + 50 * charge);
+    for (let i = 0; i < n; i++) {
+      const lateral = (Math.random() - 0.5) * 1.4;          // forward-biased cone
+      const sp = 220 + Math.random() * 520 * (0.5 + charge);
+      const vx = basis.forwardX * sp + basis.sideX * lateral * sp * 0.6 + (Math.random() - 0.5) * 120;
+      const vy = basis.forwardY * sp + basis.sideY * lateral * sp * 0.6 + (Math.random() - 0.5) * 120 - 80;
+      this.embers.spawn(hand.palm.x, hand.palm.y, vx, vy, 0.6 + Math.random() * 0.8, 3 + Math.random() * 4);
     }
   }
 
@@ -354,8 +419,8 @@ export class FireMagicEffect implements VfxEffect {
     // Clear write buffer
     writeCtx.clearRect(0, 0, pw, ph);
 
-    // Calculate delta time for visual feedback loop (assume ~60fps)
-    const dt = 1 / 60;
+    // Real frame time from the last step() so trails fade consistently off 60fps.
+    const dt = this.lastDt;
     const k = this.config.params.trails === 'smoky' ? 7.5 : 12.0;
     const fade = 1 - Math.exp(-k * dt);
 
@@ -365,7 +430,7 @@ export class FireMagicEffect implements VfxEffect {
     writeCtx.translate(pw / 2, ph);
     writeCtx.scale(0.994, 0.988);
     writeCtx.translate(-pw / 2 + Math.sin(performance.now() * 0.035) * 1.2, -ph - 165 * dt);
-    
+
     writeCtx.globalAlpha = Math.max(0, 1 - fade);
     writeCtx.globalCompositeOperation = 'source-over';
     writeCtx.drawImage(this.ppc.read, 0, 0);
@@ -379,7 +444,7 @@ export class FireMagicEffect implements VfxEffect {
 
     for (let i = 0; i < this.cap; i++) {
       if (this.heat[i] <= 0.05) continue;
-      
+
       let sprite = this.sprites.cool;
       if (this.heat[i] > 0.6) sprite = this.sprites.core;
       else if (this.heat[i] > 0.3 || isPlasma) sprite = this.sprites.mid;
@@ -387,23 +452,71 @@ export class FireMagicEffect implements VfxEffect {
       const px = this.x[i] * hw;
       const py = this.y[i] * hh;
       const pr = this.r[i] * hw;
-      
+
       writeCtx.globalAlpha = this.heat[i] * this.heat[i];
       writeCtx.drawImage(sprite, px - pr, py - pr, pr * 2, pr * 2);
     }
 
-    // Draw palm charging cores
+    // Charge orb (condensing core) + eruption flash, stamped into the heat field.
     for (let hi = 0; hi < 2; hi++) {
-      if (this.charge[hi] > 0.1) {
-        // We could draw a bright spot here if we tracked palm pos into state
+      const basis = this.lastBasis[hi];
+      if (!basis) continue;
+      const px = basis.palmX * hw;
+      const py = basis.palmY * hh;
+
+      const chg = this.charge[hi];
+      if (chg > 0.05) {
+        // Condenses (shrinks) and brightens as the charge fills — power gathering in.
+        const orbR = (38 - 16 * chg) * hw;
+        writeCtx.globalAlpha = 0.25 + 0.6 * chg;
+        writeCtx.drawImage(this.sprites.core, px - orbR, py - orbR, orbR * 2, orbR * 2);
+      }
+
+      const f = this.flash[hi];
+      if (f > 0.01) {
+        const fr = basis.scale * 1.4 * hw;
+        writeCtx.globalAlpha = f;
+        writeCtx.drawImage(this.sprites.core, px - fr, py - fr, fr * 2, fr * 2);
       }
     }
+
+    // Eruption shockwave rings — additive strokes that the feedback loop smears into ripples.
+    writeCtx.strokeStyle = this.ringColor;
+    for (const ring of this.rings) {
+      const p = ring.age / RING_LIFE;
+      if (p >= 1) continue;
+      const ease = 1 - (1 - p) * (1 - p);
+      writeCtx.globalAlpha = (1 - p) * 0.55;
+      writeCtx.lineWidth = Math.max(1, 6 * (1 - p)) * hw;
+      writeCtx.beginPath();
+      writeCtx.arc(ring.x * hw, ring.y * hh, ring.max * ease * hw, 0, Math.PI * 2);
+      writeCtx.stroke();
+    }
+    writeCtx.globalAlpha = 1;
 
     this.ppc.swap();
 
     // 3. Composite fire up to main canvas
     ctx.globalCompositeOperation = 'screen';
     ctx.drawImage(this.ppc.read, 0, 0, this.w, this.h);
+
+    // Crisp charge glow on top: a heartbeat that beats faster as the charge fills.
+    const t = performance.now() * 0.001;
+    ctx.globalCompositeOperation = 'lighter';
+    for (let hi = 0; hi < 2; hi++) {
+      const basis = this.lastBasis[hi];
+      const chg = this.charge[hi];
+      if (!basis || chg <= 0.05) continue;
+      const pulse = 1 + 0.08 * Math.sin(t * (8 + 12 * chg));
+      const gr = (30 + 10 * chg) * pulse;
+      ctx.globalAlpha = 0.4 * chg;
+      ctx.drawImage(this.sprites.core, basis.palmX - gr, basis.palmY - gr, gr * 2, gr * 2);
+    }
+
+    // Sparks ride on top of the composited fire.
+    this.embers.draw(ctx, this.emberSprite);
+
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -423,5 +536,6 @@ export class FireMagicEffect implements VfxEffect {
   stepDownQuality(): void {
     const newCap = Math.max(100, Math.floor(this.cap * 0.75));
     this.cap = newCap;
+    this.embers.halve();
   }
 }

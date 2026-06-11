@@ -27,8 +27,8 @@ export const PALETTES: Record<PaletteId, PaletteColors> = {
 // ─── Per-Effect Metadata (client-side, for onboarding HUD) ──────
 
 export const EFFECT_META: Record<EffectType, { gestureHint: string; idleBehavior: string }> = {
-  glitch_tiles:    { gestureHint: 'open hands to swirl · index fingers for lines · fists for squares', idleBehavior: 'settle' },
-  particle_nebula: { gestureHint: 'make a fist to gather the stars', idleBehavior: 'drift' },
+  glitch_tiles:    { gestureHint: 'open palms for circle · two index-only fingers for line · two fists for card shields', idleBehavior: 'settle' },
+  particle_nebula: { gestureHint: 'open palms form atom core · fists gather hand orbits', idleBehavior: 'drift' },
   aura_blaster:    { gestureHint: 'fist to charge sphere · open palm to blast beam', idleBehavior: 'fade' },
   fire_magic:      { gestureHint: 'fist to charge the flame · open to erupt', idleBehavior: 'flicker' },
 };

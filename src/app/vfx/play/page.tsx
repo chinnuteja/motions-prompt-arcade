@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState, useMemo, Suspense } from 'react';
+import React, { useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { EffectConfig, decodeEffectConfig } from '../../../lib/vfx-schema';
+import { EffectConfig, GlitchTilesConfig, decodeEffectConfig } from '../../../lib/vfx-schema';
 import { EffectEngine } from '../../../components/EffectEngine/EffectEngine';
 import { AuraBlasterEffect } from '../../../lib/effects/auraBlaster';
 import { ParticleNebulaEffect } from '../../../lib/effects/particleNebula';
@@ -10,23 +10,34 @@ import { GlitchTilesEffect } from '../../../lib/effects/glitchTiles';
 import { FireMagicEffect } from '../../../lib/effects/fireMagic';
 import { PlaceholderEffect } from '../../../lib/effects/placeholder';
 
+const DEFAULT_GLITCH_TILES_CONFIG: GlitchTilesConfig = {
+  v: 1,
+  effect: 'glitch_tiles',
+  palette: 'mono',
+  intensity: 3,
+  prompt: 'Dense glitch tiles formation test',
+  params: {
+    tileShape: 'square',
+    pullMode: 'attract',
+    snapBack: 'spring',
+  },
+};
+
 function VfxPlayer() {
   const searchParams = useSearchParams();
   const configParam = searchParams.get('config');
-  const [config, setConfig] = useState<EffectConfig | null>(null);
-  const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (configParam) {
+  const { config, error } = useMemo<{ config: EffectConfig | null; error: string }>(() => {
+    if (!configParam) {
+      return { config: DEFAULT_GLITCH_TILES_CONFIG, error: '' };
+    }
+
       const decoded = decodeEffectConfig(configParam);
       if (decoded) {
-        setConfig(decoded);
-      } else {
-        setError("Invalid effect configuration link.");
+      return { config: decoded, error: '' };
       }
-    } else {
-      setError("No effect configuration provided.");
-    }
+
+    return { config: null, error: 'Invalid effect configuration link.' };
   }, [configParam]);
 
   // Instantiate the correct effect based on config

@@ -10,39 +10,41 @@ import styles from './EffectEngine.module.css';
 const INSTRUCTION_DETAILS: Record<EffectType, { title: string; steps: string[]; gesture: string }> = {
   fire_magic: {
     title: "Fire Magic Controls",
-    gesture: "✊ Fist = Charge Flame  ·  🖐️ Open = Erupt / Flamethrower",
+    gesture: "✊ Fist = Charge Vortex  ·  🖐️ Open = Shockwave / Jets",
     steps: [
-      "Show your hands to the camera to bind the plasma field.",
-      "Make a tight fist to magnetically condense and charge plasma in your palm.",
-      "Release your fist to detonate a wild additive explosion.",
-      "With the flamethrower prompt, point your hand to direct streams from your knuckles."
+      "Keep hands relaxed to burn idle pilot flames along your palms.",
+      "Make a tight fist to pull surrounding fire into a swirling, high-density magnetic core.",
+      "Suddenly throw your hand open to release the charge as a massive explosive shockwave.",
+      "Keep your hand fully open to continuously blast either a wide flamethrower or fingertip jets."
     ]
   },
   particle_nebula: {
     title: "Particle Nebula Controls",
-    gesture: "✊ Fist = Gather Stars  ·  🖐️ Open = Detonate Swarm",
+    gesture: "🖐️🖐️ Two Open Palms = Galaxy Swirl  ·  ✊ Fist = Black Hole",
     steps: [
-      "Let the cosmic swarm flow dynamically using curl noise around your palms.",
-      "Make a fist to contract stars into a compact orbital shell.",
-      "Open your hand quickly to detonate and scatter the galaxy outward."
+      "Open both palms with fingers spread to form a 3D Galaxy swirl between your hands.",
+      "Move your palms closer or farther apart to scale the Galaxy rings.",
+      "Close your hand into a fist to collapse particles into a dense Black Hole accretion disk.",
+      "Depending on your configuration, throwing your hand open will either gently release particles or blast them away with a shockwave."
     ]
   },
   glitch_tiles: {
     title: "Glitch Tiles Controls",
-    gesture: "🤏 Pinch = Grab Card  ·  🖐️ Fling = Throw & Scatter",
+    gesture: "Open palms = Circle swirl  ·  Two index-only fingers = Line  ·  Two fists = Card shields",
     steps: [
-      "Pinch your index finger and thumb to grab a floating glass tile.",
-      "Move your hand to drag, slide, and position cards in 3D geometry.",
-      "Make a quick sweep or swipe gesture (fling) to scatter cards into portals."
+      "Open both palms with fingers spread to form the rotating circle.",
+      "Show only both index fingers, with the other fingers closed, to form a straight line in any direction.",
+      "Close both fists to split the cards into compact shields around each hand."
     ]
   },
   aura_blaster: {
     title: "Aura Blaster Controls",
     gesture: "✊ Fist = Charge Sphere  ·  🖐️ Open Palm = Fire Beam",
     steps: [
-      "Clench your hand into a fist to charge a massive, glowing energy sphere.",
-      "Hold the fist to build up power and intensity.",
-      "Open your hand (palm forward) to blast a screen-spanning plasma beam!"
+      "Make a tight fist to suck in ambient particles and charge up a massive energy sphere.",
+      "Depending on your configuration, the charge will either pull particles straight in or form a swirling gravity vortex.",
+      "Throw your hand open to unleash a massive, screen-spanning energy beam with a heavy recoil shake.",
+      "The beam's style (laser, plasma, or electric lightning) matches your prompt, and will fizzle out when your charge depletes!"
     ]
   }
 };

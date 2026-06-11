@@ -87,14 +87,14 @@ export default function VfxLandingPage() {
     {
       id: "particle_nebula",
       title: "Particle Nebula",
-      description: "Cosmic swarms using symplectic Euler springs. Form black holes, constellations, and galaxies.",
-      prompt: "I want an ocean blue galaxy of stars that swarm around my hands and explode when I open them",
+      description: "Clean cosmic particles that form an atom core between open palms and compact orbits around closed fists.",
+      prompt: "I want an ocean blue atom galaxy that expands between my open palms and gathers around my fists",
       gradient: "linear-gradient(135deg, #00f0ff, #7000ff)"
     },
     {
       id: "glitch_tiles",
       title: "Glitch Tiles",
-      description: "Glass cards that form geometric shapes based on your gestures. Fists form squares, index fingers form lines, open hands swirl.",
+      description: "Glass cards that form clean hand-controlled formations: open palms swirl, index-only fingers draw lines, fists build shields.",
       prompt: "Shatter reality into high contrast black and white mirror shards that I can grab",
       gradient: "linear-gradient(135deg, #ffffff, #555555)"
     },
