@@ -12,6 +12,7 @@ import {
   makeSheenSprite,
   EmberPool,
 } from './fxUtils';
+import { OneEuroFilter } from './oneEuro';
 
 /**
  * GLASS CARDS  (config.effect === 'glitch_tiles')
@@ -134,6 +135,19 @@ export class GlitchTilesEffect implements VfxEffect {
   private useShadow = true;
   private useSheen = true;
 
+  // Clap-to-fade: hands together → cards converge & vanish
+  private clapT = 0;
+
+  // Internal One-Euro smoothed twoHand metrics (computed from hand signals)
+  private twoHandIndexDist = 0;
+  private twoHandPalmDist = 0;
+  private twoHandMidX = 0;
+  private twoHandMidY = 0;
+  private twoHandActive = false;
+  private indexDistFilter = new OneEuroFilter(0.8, 0.01);
+  private palmDistFilter = new OneEuroFilter(0.8, 0.01);
+  private prevStepTime = 0;
+
   init(config: EffectConfig, canvasWidth: number, canvasHeight: number): void {
     if (config.effect !== 'glitch_tiles') throw new Error('Wrong config');
     this.config = config as GlitchTilesConfig;
@@ -239,6 +253,37 @@ export class GlitchTilesEffect implements VfxEffect {
     const t = performance.now() * 0.001;
     if (this.shatterCooldown > 0) this.shatterCooldown = Math.max(0, this.shatterCooldown - dt);
 
+    // ── Compute internal smoothed twoHand metrics ─────────────
+    const h0 = hands[0];
+    const h1 = hands[1];
+    if (h0 && h1 && h0.track !== 'lost' && h1.track !== 'lost') {
+      const rawIndexDist = Math.hypot(
+        h1.indexTip.x - h0.indexTip.x,
+        h1.indexTip.y - h0.indexTip.y,
+      );
+      const rawPalmDist = Math.hypot(
+        h1.palm.x - h0.palm.x,
+        h1.palm.y - h0.palm.y,
+      );
+      this.twoHandIndexDist = this.indexDistFilter.filter(rawIndexDist, dt);
+      this.twoHandPalmDist = this.palmDistFilter.filter(rawPalmDist, dt);
+      this.twoHandMidX = (h0.palm.x + h1.palm.x) / 2;
+      this.twoHandMidY = (h0.palm.y + h1.palm.y) / 2;
+      this.twoHandActive = true;
+    } else {
+      this.indexDistFilter.reset();
+      this.palmDistFilter.reset();
+      this.twoHandActive = false;
+    }
+
+    // ── Clap-to-fade: hands close together → cards converge & vanish ──
+    const CLAP_DIST = 90;
+    if (this.twoHandActive && this.twoHandPalmDist < CLAP_DIST) {
+      this.clapT = Math.min(1, this.clapT + dt * 3);
+    } else {
+      this.clapT = Math.max(0, this.clapT - dt * 2);
+    }
+
     const profiles: [FingerProfile | null, FingerProfile | null] = [
       this.getFingerProfile(hands[0]),
       this.getFingerProfile(hands[1]),
@@ -251,8 +296,8 @@ export class GlitchTilesEffect implements VfxEffect {
     }
     this.formationTime += dt;
     const targetFormationAlpha = intent.mode === 'none' ? 0 : ramp;
-    // Snappy engage so the cards leap into formation the instant the gesture reads.
-    this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(15, dt));
+    // Smoother engage so the cards settle into formation with a premium feel.
+    this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(9, dt));
 
     // Reset and assign stable formation slots. Sorting by current screen-space
     // projection keeps cards from crossing through each other on mode changes.
@@ -452,6 +497,13 @@ export class GlitchTilesEffect implements VfxEffect {
           }
         }
       }
+
+      // Clap convergence: pull cards toward the midpoint and shrink
+      if (this.clapT > 0 && this.twoHandActive) {
+        const ck = this.clapT;
+        c.x += (this.twoHandMidX - c.x) * ck * 0.4;
+        c.y += (this.twoHandMidY - c.y) * ck * 0.4;
+      }
     }
 
     // ── Fade the fire-trail canvas (dt-correct) + advance embers ──
@@ -559,15 +611,12 @@ export class GlitchTilesEffect implements VfxEffect {
     if (n <= 0) return null;
 
     if (this.formationMode === 'circle') {
-      const h0 = hands[0];
-      const h1 = hands[1];
-      if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') return null;
+      const lh0 = hands[0];
+      const lh1 = hands[1];
+      if (!lh0 || !lh1 || lh0.track === 'lost' || lh1.track === 'lost') return null;
       // Center on the midpoint between the palms (more stable than the fingertips).
-      const cx = (h0.palm.x + h1.palm.x) * 0.5;
-      const cy = (h0.palm.y + h1.palm.y) * 0.5;
-      const dx = h1.indexTip.x - h0.indexTip.x;
-      const dy = h1.indexTip.y - h0.indexTip.y;
-      const handDist = Math.hypot(dx, dy) || 1;
+      const cx = this.twoHandActive ? this.twoHandMidX : (lh0.palm.x + lh1.palm.x) * 0.5;
+      const cy = this.twoHandActive ? this.twoHandMidY : (lh0.palm.y + lh1.palm.y) * 0.5;
 
       // Continuous swirl: the whole ring rotates rigidly so cards visibly circle
       // each other. Each card keeps its stable base angle (orbitAngle) → no slot
@@ -575,9 +624,12 @@ export class GlitchTilesEffect implements VfxEffect {
       const swirl = this.formationTime * 1.5;
       const angle = c.orbitAngle + swirl;
 
-      // Diameter GROWS as the hands separate. Squashed vertically → tilted-ring
-      // perspective so it reads as a 3D orbit, not a flat clock face.
-      const rx = clamp(handDist * 0.55, 95, 360);
+      // Diameter GROWS as the hands separate — driven by ONE smoothed signal.
+      // Squashed vertically → tilted-ring perspective so it reads as a 3D orbit.
+      const smoothDist = this.twoHandActive ? this.twoHandIndexDist : Math.hypot(
+        lh1.indexTip.x - lh0.indexTip.x, lh1.indexTip.y - lh0.indexTip.y,
+      );
+      const rx = clamp(smoothDist * 0.55, 95, 360);
       const ry = rx * 0.52;
       const x = cx + Math.cos(angle) * rx;
       const y = cy + Math.sin(angle) * ry;
@@ -782,6 +834,11 @@ export class GlitchTilesEffect implements VfxEffect {
       ctx.translate(c.x, c.y);
       ctx.rotate(c.rot);
       ctx.scale(pop, pop);
+
+      // Clap fade: cards become transparent as hands converge
+      if (this.clapT > 0) {
+        ctx.globalAlpha = 1 - this.clapT;
+      }
 
       const hw = c.w / 2;
       const hh = c.h / 2;

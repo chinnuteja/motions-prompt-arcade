@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FilesetResolver, HandLandmarker, NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { OneEuroFilter, OneEuroFilter2D } from '../lib/effects/oneEuro';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -30,16 +31,24 @@ export interface HandSignals {
   edgeClipped: boolean;    // landmarks hugging frame edge
 }
 
+export interface TwoHandMetrics {
+  indexDist: number;   // smoothed px distance between the two index tips
+  palmDist: number;    // smoothed px distance between palms (fallback / clap)
+  midX: number;        // midpoint x (for centering formations)
+  midY: number;        // midpoint y
+}
+
 export interface HandTrackingState {
   hands: [HandSignals | null, HandSignals | null];
   detectionHz: number;
   t: number; // timestamp
+  twoHand: TwoHandMetrics | null;
 }
 
 // ─── Constants ──────────────────────────────────────────────────
 
 const HAND_MODEL_URL = '/mediapipe/hand_landmarker.task';
-const POSITION_ALPHA = 0.65;       // Increased for much snappier tracking (was 0.35)
+const POSITION_ALPHA = 0.4;        // Lowered — One-Euro now smooths palm/tip; this is just for the raw landmark array
 const VELOCITY_ALPHA = 0.75;       // Increased for snappier velocity (was 0.5)
 const CONFIDENCE_ALPHA = 0.3;      // EMA for detection confidence
 const PINCH_ENTER = 0.28;          // normalized pinch distance to enter "pinching"
@@ -71,6 +80,10 @@ interface HandSlotInternal {
   prevRawTipX: number; prevRawTipY: number;
   prevTimestamp: number;
 
+  // One-Euro filters for the visual-critical positions
+  palmFilter: OneEuroFilter2D;
+  tipFilter: OneEuroFilter2D;
+
   initialized: boolean;
 }
 
@@ -81,6 +94,8 @@ function createEmptySlot(label: string): HandSlotInternal {
     velX: 0, velY: 0, pinch: 1, pinching: false, prevPinching: false,
     openness: 1, scale: 0,
     prevRawTipX: 0, prevRawTipY: 0, prevTimestamp: 0,
+    palmFilter: new OneEuroFilter2D(1.0, 0.015),  // palm: heavier smoothing (it's a slow anchor)
+    tipFilter:  new OneEuroFilter2D(1.6, 0.03),   // tip: a bit snappier (it draws/leads)
     initialized: false,
   };
 }
@@ -154,6 +169,8 @@ function updateSlot(
 
   // ── First frame: snap (no EMA chase from 0,0)
   if (!slot.initialized) {
+    slot.palmFilter.reset();
+    slot.tipFilter.reset();
     slot.palmX = rawPalmX; slot.palmY = rawPalmY;
     slot.tipX = rawTipX; slot.tipY = rawTipY;
     slot.landmarks = mappedLandmarks;
@@ -166,11 +183,14 @@ function updateSlot(
     slot.prevTimestamp = timestamp;
     slot.initialized = true;
   } else {
-    // EMA smooth
-    slot.palmX = ema(slot.palmX, rawPalmX, POSITION_ALPHA);
-    slot.palmY = ema(slot.palmY, rawPalmY, POSITION_ALPHA);
-    slot.tipX = ema(slot.tipX, rawTipX, POSITION_ALPHA);
-    slot.tipY = ema(slot.tipY, rawTipY, POSITION_ALPHA);
+    // One-Euro filter for palm & indexTip (smooth when slow, responsive when fast)
+    const dtSec = Math.max(0.001, (timestamp - slot.prevTimestamp) / 1000);
+    const palmF = slot.palmFilter.filter(rawPalmX, rawPalmY, dtSec);
+    const tipF  = slot.tipFilter.filter(rawTipX, rawTipY, dtSec);
+    slot.palmX = palmF.x; slot.palmY = palmF.y;
+    slot.tipX = tipF.x;  slot.tipY = tipF.y;
+
+    // EMA smooth for landmarks array (less critical, uses lowered alpha)
     for (let i = 0; i < mappedLandmarks.length; i++) {
       if (!slot.landmarks[i]) slot.landmarks[i] = mappedLandmarks[i];
       else {
@@ -184,10 +204,9 @@ function updateSlot(
     slot.confidence = ema(slot.confidence, confidence, CONFIDENCE_ALPHA);
 
     // Velocity (pixels per second)
-    const dt = (timestamp - slot.prevTimestamp) / 1000;
-    if (dt > 0.001) {
-      const rawVelX = (rawTipX - slot.prevRawTipX) / dt;
-      const rawVelY = (rawTipY - slot.prevRawTipY) / dt;
+    if (dtSec > 0.001) {
+      const rawVelX = (rawTipX - slot.prevRawTipX) / dtSec;
+      const rawVelY = (rawTipY - slot.prevRawTipY) / dtSec;
       slot.velX = ema(slot.velX, rawVelX, VELOCITY_ALPHA);
       slot.velY = ema(slot.velY, rawVelY, VELOCITY_ALPHA);
     }
@@ -243,7 +262,12 @@ export function useHandTracking(
     hands: [null, null],
     detectionHz: 0,
     t: 0,
+    twoHand: null,
   });
+
+  // Two-hand scalar smoothers (One-Euro on distance → calm radius/clap signal)
+  const twoHandIndexFilter = useRef(new OneEuroFilter(0.8, 0.01));
+  const twoHandPalmFilter  = useRef(new OneEuroFilter(0.8, 0.01));
 
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const lastVideoTimeRef = useRef<number>(-1);
@@ -377,10 +401,36 @@ export function useHandTracking(
         const leftSignals = slots.left.track !== 'lost' ? slotToSignals(slots.left) : null;
         const rightSignals = slots.right.track !== 'lost' ? slotToSignals(slots.right) : null;
 
+        // Compute smoothed two-hand metrics
+        let twoHand: TwoHandMetrics | null = null;
+        if (leftSignals && rightSignals) {
+          const dtSec = Math.max(0.001, (now - (signalsRef.current.t || now)) / 1000);
+
+          const rawIndexDist = Math.hypot(
+            rightSignals.indexTip.x - leftSignals.indexTip.x,
+            rightSignals.indexTip.y - leftSignals.indexTip.y,
+          );
+          const rawPalmDist = Math.hypot(
+            rightSignals.palm.x - leftSignals.palm.x,
+            rightSignals.palm.y - leftSignals.palm.y,
+          );
+
+          twoHand = {
+            indexDist: twoHandIndexFilter.current.filter(rawIndexDist, dtSec),
+            palmDist:  twoHandPalmFilter.current.filter(rawPalmDist, dtSec),
+            midX: (leftSignals.palm.x + rightSignals.palm.x) / 2,
+            midY: (leftSignals.palm.y + rightSignals.palm.y) / 2,
+          };
+        } else {
+          twoHandIndexFilter.current.reset();
+          twoHandPalmFilter.current.reset();
+        }
+
         signalsRef.current = {
           hands: [leftSignals, rightSignals],
           detectionHz: detectionHzRef.current,
           t: now,
+          twoHand,
         };
       }
 
@@ -392,7 +442,7 @@ export function useHandTracking(
     if (isRunning && isReady && videoElement) {
       animationFrameId = requestAnimationFrame(loop);
     } else {
-      signalsRef.current = { hands: [null, null], detectionHz: 0, t: 0 };
+      signalsRef.current = { hands: [null, null], detectionHz: 0, t: 0, twoHand: null };
     }
 
     return () => {
