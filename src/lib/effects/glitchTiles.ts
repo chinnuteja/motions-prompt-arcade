@@ -309,14 +309,13 @@ export class GlitchTilesEffect implements VfxEffect {
     ];
 
     const intent = this.selectFormation(hands, profiles);
-    const circleIntentActive = intent.mode === 'circle' || this.formationMode === 'circle';
+    const formationIntentActive = intent.mode !== 'none' || this.formationMode !== 'none';
 
     // ── Clap-to-fade: hands close together → cards converge & vanish ──
-    // Open palms own circle radius. Do not let the clap collapse fight circle
-    // resizing, or the ring suddenly folds into the center while palms move.
+    // Formations own the layout. Do not let the old clap collapse fight line
+    // length changes, circle radius changes, or the two-fist grid.
     const CLAP_DIST = 80;
-    const circleControlsRadius = circleIntentActive;
-    if (!circleControlsRadius && this.twoHandActive && this.twoHandPalmDist < CLAP_DIST) {
+    if (!formationIntentActive && this.twoHandActive && this.twoHandPalmDist < CLAP_DIST) {
       this.clapT = Math.min(1, this.clapT + dt * 3);
     } else {
       this.clapT = Math.max(0, this.clapT - dt * 4);
@@ -678,17 +677,15 @@ export class GlitchTilesEffect implements VfxEffect {
     return trackerAgrees && longFingersTucked;
   }
 
-  private isClosedFist(hand: HandSignals | null, profile: FingerProfile | null): boolean {
-    if (!hand || hand.track === 'lost') return false;
-    if (this.isFullyClosedFist(hand, profile)) return true;
-    if (hand.openness < 0.38 && (profile ? profile.extendedCount <= 2 : true)) return true;
-    if (profile?.index || this.isPointingHand(hand, profile)) return false;
-    return hand.openness < 0.54 && (profile ? profile.extendedCount <= 2 : true);
-  }
-
   private isOpenPalm(hand: HandSignals | null, profile: FingerProfile | null): boolean {
     if (!hand || hand.track === 'lost') return false;
     return hand.openness > 0.56 || (profile?.extendedCount ?? 0) >= 3;
+  }
+
+  private isCirclePalm(hand: HandSignals | null, profile: FingerProfile | null): boolean {
+    if (!hand || hand.track === 'lost') return false;
+    const extended = profile?.extendedCount ?? 0;
+    return hand.openness > 0.56 || extended >= 3;
   }
 
   private isPointingHand(hand: HandSignals | null, profile: FingerProfile | null): boolean {
@@ -824,32 +821,30 @@ export class GlitchTilesEffect implements VfxEffect {
       const direct0 = this.isDirectionalLineHand(h0, p0);
       const direct1 = this.isDirectionalLineHand(h1, p1);
       const clearLine = (idx0 && idx1) || (idx0 && direct1) || (direct0 && idx1) || (direct0 && direct1);
-      const closed0 = this.isClosedFist(h0, p0);
-      const closed1 = this.isClosedFist(h1, p1);
+      const lineHint = idx0 || idx1 || direct0 || direct1;
+      const gridFists = fullFist0 && fullFist1;
+      const circle0 = this.isCirclePalm(h0, p0);
+      const circle1 = this.isCirclePalm(h1, p1);
+      const clearCircle = circle0 && circle1;
 
+      if (clearCircle) return { mode: 'circle', handIndex: 0 };
       if (clearLine) return { mode: 'line', handIndex: direct0 ? 0 : 1 };
-      if (fullFist0 && fullFist1) return { mode: 'fists', handIndex: 0 };
+      if (this.formationMode === 'line' && lineHint) return { mode: 'line', handIndex: direct0 ? 0 : 1 };
+      if (gridFists) return { mode: 'fists', handIndex: 0 };
 
       if (!anyPinch || !anyHeld) {
         // TWO INDEX FINGERS -> LINE. This must win before fist detection,
         // because index-only hands can have low openness while the other
         // fingers are closed.
-        if (closed0 && closed1) return { mode: 'fists', handIndex: 0 };
-
         if (direct0 || direct1) return { mode: 'line', handIndex: direct0 ? 0 : 1 };
 
-        if (this.formationMode === 'line' && !(closed0 && closed1) && (direct0 || direct1 || idx0 || idx1)) {
+        if (this.formationMode === 'line' && !gridFists && lineHint) {
           return { mode: 'line', handIndex: 0 };
         }
 
-        const open0 = this.isOpenPalm(h0, p0);
-        const open1 = this.isOpenPalm(h1, p1);
-        const bothOpenish = open0 && open1;
-        if (bothOpenish) return { mode: 'circle', handIndex: 0 };
-
         // Circle hysteresis: when palms rotate sideways or move closer, openness
         // can dip. Keep shrinking the existing circle unless the user clearly points.
-        if (this.formationMode === 'circle' && !(closed0 && closed1) && !direct0 && !direct1) {
+        if (this.formationMode === 'circle' && !gridFists && !direct0 && !direct1) {
           return { mode: 'circle', handIndex: 0 };
         }
 

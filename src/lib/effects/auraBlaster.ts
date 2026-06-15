@@ -8,6 +8,12 @@ const BOLT_SEGMENTS = 16;
 const ULTIMATE_ARM_SECONDS = 0.35;
 const ULTIMATE_DURATION = 1.2;
 const MAX_PARTICLE_SPEED = 2800;
+const FIST_CHARGE_OPENNESS = 0.52;
+const OPEN_FIRE_OPENNESS = 0.56;
+const DUAL_FIST_OPENNESS = 0.48;
+const DUAL_OPEN_OPENNESS = 0.62;
+const FIRE_START_CHARGE = 0.045;
+const FIRE_HOLD_CHARGE = 0.015;
 
 interface HandBasis {
   palmX: number;
@@ -165,8 +171,8 @@ export class AuraBlasterEffect implements VfxEffect {
     ];
 
     const bothTracked = !!bases[0] && !!bases[1];
-    const bothFists = bothTracked && hands[0]!.openness < 0.35 && hands[1]!.openness < 0.35;
-    const bothOpen = bothTracked && hands[0]!.openness > 0.7 && hands[1]!.openness > 0.7;
+    const bothFists = bothTracked && hands[0]!.openness < DUAL_FIST_OPENNESS && hands[1]!.openness < DUAL_FIST_OPENNESS;
+    const bothOpen = bothTracked && hands[0]!.openness > DUAL_OPEN_OPENNESS && hands[1]!.openness > DUAL_OPEN_OPENNESS;
 
     this.stepUltimateState(bases, bothTracked, bothFists, bothOpen, dt, ramp);
     this.stepHands(hands, bases, dt, ramp);
@@ -257,19 +263,21 @@ export class AuraBlasterEffect implements VfxEffect {
         this.firing[hi] = false;
         this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.45);
       } else {
-        const isFist = hand.openness < 0.35;
-        const isOpen = hand.openness > 0.7;
+        const openness = hand.openness;
+        const isFist = openness < FIST_CHARGE_OPENNESS;
+        const isOpen = openness > OPEN_FIRE_OPENNESS;
+        const closedness = clamp((FIST_CHARGE_OPENNESS - openness) / FIST_CHARGE_OPENNESS, 0, 1);
 
         if (isFist) {
-          this.charge[hi] = Math.min(1.5, this.charge[hi] + dt * 0.95);
+          this.charge[hi] = Math.min(1.5, this.charge[hi] + dt * (0.55 + closedness * 0.85));
           this.firing[hi] = false;
-        } else if (isOpen && this.charge[hi] > 0.1) {
+        } else if (isOpen && (this.charge[hi] > FIRE_START_CHARGE || (this.wasFiring[hi] && this.charge[hi] > FIRE_HOLD_CHARGE))) {
           this.firing[hi] = true;
-          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.34);
+          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.32);
           this.emitBeamSparks(basis, hi, dt, ramp);
         } else {
           this.firing[hi] = false;
-          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.55);
+          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.22);
         }
       }
 
@@ -283,7 +291,7 @@ export class AuraBlasterEffect implements VfxEffect {
       this.muzzle[hi] = Math.max(0, this.muzzle[hi] - dt * 5.4);
       this.recoil[hi] = Math.max(0, this.recoil[hi] - dt * 3.8);
       this.beamProgress[hi] = this.firing[hi]
-        ? Math.min(1, this.beamProgress[hi] + dt * 8.5)
+        ? Math.min(1, this.beamProgress[hi] + dt * 12.5)
         : Math.max(0, this.beamProgress[hi] - dt * 12);
       this.wasFiring[hi] = this.firing[hi];
     }
@@ -697,7 +705,7 @@ export class AuraBlasterEffect implements VfxEffect {
 
   private drawNormalBeam(ctx: CanvasRenderingContext2D, basis: HandBasis, handIndex: number, t: number): void {
     const intensity = this.charge[handIndex];
-    const fizzle = intensity < 0.22 ? intensity / 0.22 : 1;
+    const fizzle = intensity < 0.16 ? intensity / 0.16 : 1;
     if (fizzle <= 0.01) return;
 
     const flicker = fizzle < 1 ? 0.72 + 0.28 * Math.random() : 0.94 + Math.random() * 0.06;
