@@ -493,7 +493,32 @@ export class ParticleNebulaEffect implements VfxEffect {
       return { mode: 'galaxy', hands: [0, 1] };
     }
 
+    if (tracked.length === 2) {
+      const h0 = hands[0];
+      const h1 = hands[1];
+      if (h0 && h1) {
+        const maintainingGalaxy = this.formMode === 'galaxy' || this.pendingIntent.mode === 'galaxy';
+        const h0Control = this.isOpenPalmControlHand(h0, maintainingGalaxy);
+        const h1Control = this.isOpenPalmControlHand(h1, maintainingGalaxy);
+        if (h0Control && h1Control) {
+          return { mode: 'galaxy', hands: [0, 1] };
+        }
+      }
+    }
+
     return { mode: 'none', hands: [] };
+  }
+
+  private isOpenPalmControlHand(hand: HandSignals, maintainingGalaxy: boolean): boolean {
+    const extendedCount = this.getExtendedFingerCount(hand);
+    const definitelyFist = hand.openness < 0.28 || (hand.openness < 0.42 && extendedCount <= 1);
+    if (definitelyFist) return false;
+
+    if (maintainingGalaxy) {
+      return hand.openness > 0.34 || extendedCount >= 2;
+    }
+
+    return hand.openness > 0.5 || extendedCount >= 3;
   }
 
   private sameIntent(a: NebulaIntent, b: NebulaIntent): boolean {

@@ -60,13 +60,16 @@ interface Card {
   spawnT: number;   // 0→1 pop-in
   fire: number;     // 0→1 fire energy
   seed: number;
+  accent: string;
 
   bridgeSlot: number; // slot index in the index↔index tether bridge, -1 if not in formation
   formationSlot: number;
-  formDepth: number;  // 0.6–1.1 orbit depth in circle swirl (front cards bigger); 1 otherwise
+  formDepth: number;  // stack ordering/scale for fist shields; 1 for flat circle/line
+  formScale: number;
+  formAlpha: number;
 }
 
-type FormationMode = 'none' | 'line' | 'circle' | 'fists' | 'square' | 'pack';
+type FormationMode = 'none' | 'line' | 'circle' | 'fists';
 
 interface FingerProfile {
   thumb: boolean;
@@ -90,11 +93,20 @@ interface FormationTarget {
   damping: number;
 }
 
+interface LineGeometry {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  ux: number;
+  uy: number;
+  len: number;
+}
+
 const RING_R = 185;          // orbit ring radius around palm (px)
 const GRAB_R = 150;          // how close indexTip must be to grab a free card
 const FIRE_SPEED = 900;      // px/s throw speed that fully ignites a card
 const WALL_RESTITUTION = 0.55;
-const FORMATION_SHATTER_SPEED = 480;
 
 export class GlitchTilesEffect implements VfxEffect {
   readonly effectIncludesVideo = true;
@@ -121,16 +133,17 @@ export class GlitchTilesEffect implements VfxEffect {
   private primary = '#ffffff';
   private glow = '#ffffff';
   private emberColor = '#ff7a18';
+  private accentColors: string[] = ['#ffffff'];
 
-  // Readable gesture formations: index line, two-index circle, thumb/index square, fist pack/drop.
+  // Readable gesture formations: two-index line, open-palm circle, two-fist 3x3 grid.
   private formationMode: FormationMode = 'none';
   private formationAlpha = 0;
   private formationHand = 0;
   private formationTime = 0;
   private formationN = 0;
-  private shatterCooldown = 0;
   private lastRamp = 0;
   private _slottedMode: FormationMode = 'none';
+  private circleSnapT = 0;
 
   // Quality tiers (one-way)
   private useShadow = true;
@@ -138,17 +151,15 @@ export class GlitchTilesEffect implements VfxEffect {
 
   // Clap-to-fade: hands together → cards converge & vanish
   private clapT = 0;
-  private clapCooldown = 0;
 
   // Internal One-Euro smoothed twoHand metrics (computed from hand signals)
-  private twoHandIndexDist = 0;
+  private twoHandRawPalmDist = 0;
   private twoHandPalmDist = 0;
   private twoHandMidX = 0;
   private twoHandMidY = 0;
   private twoHandActive = false;
   private indexDistFilter = new OneEuroFilter(0.8, 0.01);
   private palmDistFilter = new OneEuroFilter(0.8, 0.01);
-  private prevStepTime = 0;
 
   init(config: EffectConfig, canvasWidth: number, canvasHeight: number): void {
     if (config.effect !== 'glitch_tiles') throw new Error('Wrong config');
@@ -160,7 +171,17 @@ export class GlitchTilesEffect implements VfxEffect {
     this.primary = palette.primary;
     this.glow = palette.glow;
 
-    this.targetCount = config.intensity === 1 ? 16 : config.intensity === 2 ? 22 : 28;
+    this.accentColors = [
+      palette.primary,
+      palette.secondary,
+      palette.glow,
+      '#77ffd7',
+      '#ffe66d',
+      '#b8a7ff',
+      '#ff9ed1',
+      '#b9f2ff',
+    ];
+    this.targetCount = config.intensity === 1 ? 28 : config.intensity === 2 ? 40 : 54;
 
     // Offscreen trail
     this.trailCanvas = document.createElement('canvas');
@@ -187,10 +208,10 @@ export class GlitchTilesEffect implements VfxEffect {
     const { tileShape } = this.config.params;
     this.cards = [];
 
-    // Card silhouette per shape
-    let baseW = 118;
-    let baseH = 118;
-    if (tileShape === 'wide') { baseW = 176; baseH = 104; }
+    // Premium vertical glass-tile silhouette: larger than the tiny squares,
+    // but still compact enough to keep formations crisp and layered.
+    const baseW = tileShape === 'wide' ? 66 : tileShape === 'shard' ? 58 : 62;
+    const baseH = tileShape === 'wide' ? 80 : tileShape === 'shard' ? 76 : 78;
 
     // Spread the live video sample regions across the frame so faces / motion
     // appear inside the cards (rather than every card showing the same spot).
@@ -203,8 +224,8 @@ export class GlitchTilesEffect implements VfxEffect {
       const gx = i % cols;
       const gy = Math.floor(i / cols);
 
-      const srcW = baseW * 1.1;
-      const srcH = baseH * 1.1;
+      const srcW = baseW * 1.52;
+      const srcH = baseH * 1.24;
       // Sample centered in this card's grid cell, clamped to frame
       const srcX = clamp(gx * cellW + cellW / 2 - srcW / 2, 0, this.w - srcW);
       const srcY = clamp(gy * cellH + cellH / 2 - srcH / 2, 0, this.h - srcH);
@@ -228,16 +249,19 @@ export class GlitchTilesEffect implements VfxEffect {
         homeX, homeY,
         orbitAngle: (i / this.targetCount) * Math.PI * 2,
         bobPhase: Math.random() * Math.PI * 2,
-        shardRot: tileShape === 'shard' ? (Math.random() - 0.5) * 0.5 : 0,
+        shardRot: 0,
         held: -1,
         grabDX: 0,
         grabDY: 0,
         spawnT: 0,
         fire: 0,
         seed: Math.random() * 1000,
+        accent: this.accentColors[i % this.accentColors.length],
         bridgeSlot: -1,
         formationSlot: -1,
         formDepth: 1,
+        formScale: 1,
+        formAlpha: 1,
       });
     }
   }
@@ -254,7 +278,6 @@ export class GlitchTilesEffect implements VfxEffect {
     const { pullMode, snapBack } = this.config.params;
     const t = performance.now() * 0.001;
     if (this.cards.length < this.targetCount) this.spawnCards();
-    if (this.shatterCooldown > 0) this.shatterCooldown = Math.max(0, this.shatterCooldown - dt);
 
     // ── Compute internal smoothed twoHand metrics ─────────────
     const h0 = hands[0];
@@ -268,7 +291,8 @@ export class GlitchTilesEffect implements VfxEffect {
         h1.palm.x - h0.palm.x,
         h1.palm.y - h0.palm.y,
       );
-      this.twoHandIndexDist = this.indexDistFilter.filter(rawIndexDist, dt);
+      this.indexDistFilter.filter(rawIndexDist, dt);
+      this.twoHandRawPalmDist = rawPalmDist;
       this.twoHandPalmDist = this.palmDistFilter.filter(rawPalmDist, dt);
       this.twoHandMidX = (h0.palm.x + h1.palm.x) / 2;
       this.twoHandMidY = (h0.palm.y + h1.palm.y) / 2;
@@ -279,58 +303,94 @@ export class GlitchTilesEffect implements VfxEffect {
       this.twoHandActive = false;
     }
 
-    // ── Clap-to-fade: hands close together → cards converge & vanish ──
-    const CLAP_DIST = 80;
-    const clapAllowed = this.formationMode !== 'circle';
-    if (clapAllowed && this.twoHandActive && this.twoHandPalmDist < CLAP_DIST) {
-      this.clapT = Math.min(1, this.clapT + dt * 3);
-    } else {
-      this.clapT = Math.max(0, this.clapT - dt * 2);
-    }
-
-    if (this.clapT > 0.9) this.clapCooldown = 0.8;
-    this.clapCooldown = Math.max(0, this.clapCooldown - dt);
-
     const profiles: [FingerProfile | null, FingerProfile | null] = [
       this.getFingerProfile(hands[0]),
       this.getFingerProfile(hands[1]),
     ];
 
     const intent = this.selectFormation(hands, profiles);
+    const circleIntentActive = intent.mode === 'circle' || this.formationMode === 'circle';
+
+    // ── Clap-to-fade: hands close together → cards converge & vanish ──
+    // Open palms own circle radius. Do not let the clap collapse fight circle
+    // resizing, or the ring suddenly folds into the center while palms move.
+    const CLAP_DIST = 80;
+    const circleControlsRadius = circleIntentActive;
+    if (!circleControlsRadius && this.twoHandActive && this.twoHandPalmDist < CLAP_DIST) {
+      this.clapT = Math.min(1, this.clapT + dt * 3);
+    } else {
+      this.clapT = Math.max(0, this.clapT - dt * 4);
+    }
+
     if (intent.mode !== this.formationMode || intent.handIndex !== this.formationHand) {
+      const previousMode = this.formationMode;
       this.formationMode = intent.mode;
       this.formationHand = intent.handIndex;
       this.formationTime = 0;
+
+      if (intent.mode === 'circle') {
+        this.circleSnapT = previousMode === 'line' ? 0.28 : 0.18;
+        this.formationAlpha = Math.max(this.formationAlpha, ramp * 0.9);
+        this.clapT = 0;
+      } else if (intent.mode === 'fists') {
+        for (const c of this.cards) {
+          if (c.held === -1) {
+            c.vx = 0;
+            c.vy = 0;
+            c.angVel = 0;
+          }
+        }
+      }
     }
     this.formationTime += dt;
     const targetFormationAlpha = intent.mode === 'none' ? 0 : ramp;
-    // Smoother engage so the cards settle into formation with a premium feel.
-    this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(9, dt));
+    // Smoother engage normally; circle entry gets a short snap so open palms
+    // feel immediate after a line pose instead of slowly melting into place.
+    const engageRate = this.circleSnapT > 0 && this.formationMode === 'circle' ? 32 : 9;
+    this.formationAlpha += (targetFormationAlpha - this.formationAlpha) * (1 - expDamp(engageRate, dt));
 
     // Reset transient per-frame fields only
     for (const c of this.cards) {
       c.bridgeSlot = -1;
       c.formDepth = 1;
+      c.formScale = 1;
     }
 
     const forming = this.formationMode !== 'none' && this.formationAlpha > 0.03;
 
     if (forming) {
+      const desiredN = this.getDesiredFormationCount(this.formationMode, hands);
+      const modeChanged = this.formationMode !== this._slottedMode;
       // Only (re)assign slots when the formation just changed, OR when slots are unassigned.
       const needsAssign =
-        this.formationMode !== this._slottedMode ||
-        this.cards.some((c) => c.held === -1 && c.formationSlot === -1);
+        modeChanged ||
+        this.formationN !== desiredN ||
+        this.cards.filter((c) => c.held === -1 && c.formationSlot >= 0 && c.formationSlot < desiredN).length < desiredN;
 
       if (needsAssign) {
-        // clear old slots
-        for (const c of this.cards) c.formationSlot = -1;
+        if (modeChanged) {
+          for (const c of this.cards) c.formationSlot = -1;
+        }
 
         const eligible = this.cards.filter((c) => c.held === -1);
         const sortHand = hands[this.formationHand];
 
-        if ((this.formationMode === 'line' || this.formationMode === 'circle') && hands[0] && hands[1]) {
-          const ax = hands[0]!.indexTip.x, ay = hands[0]!.indexTip.y;
-          const dx = hands[1]!.indexTip.x - ax, dy = hands[1]!.indexTip.y - ay;
+        if (this.formationMode === 'line') {
+          const line = this.getLineGeometry(hands);
+          if (line) {
+            const { ax, ay, ux, uy } = line;
+            eligible.sort((a, b) =>
+              ((a.x - ax) * ux + (a.y - ay) * uy) - ((b.x - ax) * ux + (b.y - ay) * uy));
+          }
+        } else if (this.formationMode === 'circle') {
+          const ring = this.getCircleGeometry(hands);
+          if (ring) {
+            eligible.sort((a, b) =>
+              Math.atan2(a.y - ring.cy, a.x - ring.cx) - Math.atan2(b.y - ring.cy, b.x - ring.cx));
+          }
+        } else if (hands[0] && hands[1]) {
+          const ax = hands[0]!.palm.x, ay = hands[0]!.palm.y;
+          const dx = hands[1]!.palm.x - ax, dy = hands[1]!.palm.y - ay;
           eligible.sort((a, b) =>
             ((a.x - ax) * dx + (a.y - ay) * dy) - ((b.x - ax) * dx + (b.y - ay) * dy));
         } else if (sortHand) {
@@ -339,8 +399,33 @@ export class GlitchTilesEffect implements VfxEffect {
             Math.atan2(b.y - sortHand.palm.y, b.x - sortHand.palm.x));
         }
 
-        for (let i = 0; i < eligible.length; i++) eligible[i].formationSlot = i;
-        this.formationN = eligible.length;
+        const activeN = Math.min(
+          this.formationMode === 'circle' || this.formationMode === 'line' ? eligible.length : desiredN,
+          eligible.length,
+        );
+        this.formationN = activeN;
+
+        const used = new Set<number>();
+        for (const c of this.cards) {
+          const slot = c.formationSlot;
+          if (c.held !== -1) continue;
+          if (slot >= 0 && slot < activeN && !used.has(slot)) {
+            used.add(slot);
+          } else if (slot !== -1) {
+            c.formationSlot = -1;
+          }
+        }
+
+        for (let slot = 0; slot < activeN; slot++) {
+          if (used.has(slot)) continue;
+          const next = eligible.find((c) => c.formationSlot === -1);
+          if (!next) break;
+          next.formationSlot = slot;
+          next.formAlpha = this.formationMode === 'circle' && this.circleSnapT > 0 ? 1 : 0;
+          this.seedCardNearFormation(next, slot, activeN, hands);
+          used.add(slot);
+        }
+
         this._slottedMode = this.formationMode;
       }
       // else: keep existing slots — cards stay put, no reshuffle churn
@@ -349,6 +434,14 @@ export class GlitchTilesEffect implements VfxEffect {
       this._slottedMode = 'none';
       for (const c of this.cards) c.formationSlot = -1;
     }
+
+    for (const c of this.cards) {
+      const targetAlpha = !forming || c.held !== -1 || c.formationSlot >= 0 ? 1 : 0;
+      const alphaRate = this.circleSnapT > 0 && this.formationMode === 'circle' ? 36 : 12;
+      c.formAlpha += (targetAlpha - c.formAlpha) * (1 - expDamp(alphaRate, dt));
+    }
+
+    if (this.circleSnapT > 0) this.circleSnapT = Math.max(0, this.circleSnapT - dt);
 
     // ── Grab / throw impulse events ──────────────────────────────
     for (let hi = 0; hi < 2; hi++) {
@@ -556,29 +649,40 @@ export class GlitchTilesEffect implements VfxEffect {
     if (!hand || hand.track === 'lost' || hand.landmarks.length < 21 || hand.scale <= 1) return null;
     const palm = hand.palm;
     const ratio = (idx: number) => Math.hypot(hand.landmarks[idx].x - palm.x, hand.landmarks[idx].y - palm.y) / hand.scale;
+    const segment = (tipIdx: number, baseIdx: number) =>
+      Math.hypot(
+        hand.landmarks[tipIdx].x - hand.landmarks[baseIdx].x,
+        hand.landmarks[tipIdx].y - hand.landmarks[baseIdx].y,
+      ) / hand.scale;
+
     const thumb = ratio(4) > 0.78;
-    const index = ratio(8) > 0.95;   // was 1.02 — easier to register index-extended
-    const middle = ratio(12) > 1.02;
-    const ring = ratio(16) > 0.98;
-    const pinky = ratio(20) > 0.92;
+    const index = ratio(8) > 0.9 || segment(8, 5) > 0.58;
+    const middle = ratio(12) > 1.02 || segment(12, 9) > 0.66;
+    const ring = ratio(16) > 0.98 || segment(16, 13) > 0.62;
+    const pinky = ratio(20) > 0.92 || segment(20, 17) > 0.55;
     const extendedCount = Number(thumb) + Number(index) + Number(middle) + Number(ring) + Number(pinky);
     return { thumb, index, middle, ring, pinky, extendedCount };
   }
 
-  /** True when both hands are tracked closed fists → drives the two-fist square. */
-  private isTwoFistSquare(hands: [HandSignals | null, HandSignals | null]): boolean {
-    const h0 = hands[0];
-    const h1 = hands[1];
-    return !!(
-      h0 && h1 &&
-      h0.track !== 'lost' && h1.track !== 'lost' &&
-      h0.openness < 0.42 && h1.openness < 0.42
-    );
+  private isFullyClosedFist(hand: HandSignals | null, profile: FingerProfile | null): boolean {
+    if (!hand || hand.track === 'lost' || hand.landmarks.length < 21 || hand.scale <= 1) return false;
+    const palm = hand.palm;
+    const reach = (idx: number) =>
+      Math.hypot(hand.landmarks[idx].x - palm.x, hand.landmarks[idx].y - palm.y) / hand.scale;
+    const indexTucked = reach(8) < 0.82;
+    const middleTucked = reach(12) < 0.9;
+    const ringTucked = reach(16) < 0.88;
+    const pinkyTucked = reach(20) < 0.84;
+    const longFingersTucked = indexTucked && middleTucked && ringTucked && pinkyTucked;
+    const trackerAgrees = hand.openness < 0.62 && (profile ? profile.extendedCount <= 2 : true);
+    return trackerAgrees && longFingersTucked;
   }
 
   private isClosedFist(hand: HandSignals | null, profile: FingerProfile | null): boolean {
     if (!hand || hand.track === 'lost') return false;
-    if (profile?.index) return false;
+    if (this.isFullyClosedFist(hand, profile)) return true;
+    if (hand.openness < 0.38 && (profile ? profile.extendedCount <= 2 : true)) return true;
+    if (profile?.index || this.isPointingHand(hand, profile)) return false;
     return hand.openness < 0.54 && (profile ? profile.extendedCount <= 2 : true);
   }
 
@@ -591,7 +695,6 @@ export class GlitchTilesEffect implements VfxEffect {
     if (!hand || hand.track === 'lost' || !profile || hand.landmarks.length < 21 || hand.scale <= 1) {
       return false;
     }
-
     const palm = hand.palm;
     const reach = (idx: number) =>
       Math.hypot(hand.landmarks[idx].x - palm.x, hand.landmarks[idx].y - palm.y) / hand.scale;
@@ -600,18 +703,104 @@ export class GlitchTilesEffect implements VfxEffect {
     const middleReach = reach(12);
     const ringReach = reach(16);
     const pinkyReach = reach(20);
+    const segment = (tipIdx: number, baseIdx: number) =>
+      Math.hypot(
+        hand.landmarks[tipIdx].x - hand.landmarks[baseIdx].x,
+        hand.landmarks[tipIdx].y - hand.landmarks[baseIdx].y,
+      ) / hand.scale;
+    const indexSegment = segment(8, 5);
+    const nonIndexFolded = !profile.middle && !profile.ring && !profile.pinky;
     const profilePoint =
       profile.index &&
-      !profile.ring &&
-      !profile.pinky &&
-      profile.extendedCount <= 2;
+      nonIndexFolded &&
+      profile.extendedCount <= (profile.thumb ? 2 : 1);
+    const segmentPoint =
+      indexSegment > 0.58 &&
+      nonIndexFolded &&
+      indexReach > Math.max(middleReach, ringReach, pinkyReach) - 0.02 &&
+      profile.extendedCount <= (profile.thumb ? 2 : 1);
+    const edgeLineBias =
+      this.isDiagonalLineZone(hand) &&
+      indexSegment > 0.48 &&
+      nonIndexFolded &&
+      indexReach > Math.max(middleReach, ringReach, pinkyReach) - 0.1 &&
+      profile.extendedCount <= (profile.thumb ? 2 : 1);
     const indexClearlyLeads =
-      indexReach > 0.7 &&
-      indexReach > middleReach + 0.03 &&
-      indexReach > ringReach + 0.08 &&
-      indexReach > pinkyReach + 0.08;
+      indexReach > 0.62 &&
+      indexReach > middleReach + 0.02 &&
+      indexReach > ringReach + 0.06 &&
+      indexReach > pinkyReach + 0.06;
 
-    return profilePoint || (indexClearlyLeads && hand.openness < 0.72 && profile.extendedCount <= 2);
+    return profilePoint || segmentPoint || edgeLineBias || (indexClearlyLeads && hand.openness < 0.74 && nonIndexFolded);
+  }
+
+  private isDiagonalLineZone(hand: HandSignals): boolean {
+    const tip = hand.indexTip;
+    const nearCorner =
+      (tip.x < this.w * 0.3 || tip.x > this.w * 0.7) &&
+      (tip.y < this.h * 0.34 || tip.y > this.h * 0.78);
+    const nearEdgeDiagonal =
+      (tip.x < this.w * 0.14 || tip.x > this.w * 0.86) &&
+      (tip.y < this.h * 0.42 || tip.y > this.h * 0.62);
+    const fastDiagonalReach =
+      Math.hypot(hand.indexVel.x, hand.indexVel.y) > 680 &&
+      Math.abs(hand.indexVel.x) > 150 &&
+      Math.abs(hand.indexVel.y) > 150;
+
+    return nearCorner || nearEdgeDiagonal || (hand.edgeClipped && fastDiagonalReach);
+  }
+
+  private isDirectionalLineHand(hand: HandSignals | null, profile: FingerProfile | null): boolean {
+    if (!hand || hand.track === 'lost' || hand.landmarks.length < 21 || hand.scale <= 1) return false;
+
+    const pointIntent = this.isPointingHand(hand, profile);
+    const tip = hand.indexTip;
+    const nearTopDiagonal = tip.y < this.h * 0.36 && (tip.x < this.w * 0.36 || tip.x > this.w * 0.64);
+    const nearScreenEdge = tip.y < this.h * 0.18 || tip.y > this.h * 0.86 || tip.x < this.w * 0.12 || tip.x > this.w * 0.88;
+    const speed = Math.hypot(hand.indexVel.x, hand.indexVel.y);
+    const fastDiagonalReach = speed > 760 && Math.abs(hand.indexVel.x) > 180 && Math.abs(hand.indexVel.y) > 180;
+
+    return pointIntent && (nearTopDiagonal || fastDiagonalReach || nearScreenEdge || this.isDiagonalLineZone(hand));
+  }
+
+  private getDesiredFormationCount(
+    mode: FormationMode,
+    hands: [HandSignals | null, HandSignals | null],
+  ): number {
+    if (mode === 'circle') {
+      const ring = this.getCircleGeometry(hands);
+      if (!ring) return 0;
+      return this.targetCount;
+    }
+
+    if (mode === 'line') {
+      const line = this.getLineGeometry(hands);
+      if (!line) return 0;
+      return this.targetCount;
+    }
+
+    if (mode === 'fists') return Math.min(this.targetCount, 9);
+    return 0;
+  }
+
+  private seedCardNearFormation(
+    c: Card,
+    slot: number,
+    n: number,
+    hands: [HandSignals | null, HandSignals | null],
+  ): void {
+    const target = this.getFormationTarget(c, slot, n, hands);
+    if (!target) return;
+
+    const line = this.formationMode === 'line' ? this.getLineGeometry(hands) : null;
+    const dropX = line ? -line.uy * 10 : 0;
+    const dropY = line ? line.ux * 10 : 0;
+    c.x = target.x + dropX;
+    c.y = target.y + dropY;
+    c.vx = 0;
+    c.vy = 0;
+    c.rot = target.rot;
+    c.angVel = 0;
   }
 
   private selectFormation(
@@ -628,36 +817,56 @@ export class GlitchTilesEffect implements VfxEffect {
       const p1 = profiles[1];
       const anyPinch = h0.pinching || h1.pinching;
       const anyHeld = this.cards.some((c) => c.held !== -1);
+      const fullFist0 = this.isFullyClosedFist(h0, p0);
+      const fullFist1 = this.isFullyClosedFist(h1, p1);
+      const idx0 = this.isPointingHand(h0, p0);
+      const idx1 = this.isPointingHand(h1, p1);
+      const direct0 = this.isDirectionalLineHand(h0, p0);
+      const direct1 = this.isDirectionalLineHand(h1, p1);
+      const clearLine = (idx0 && idx1) || (idx0 && direct1) || (direct0 && idx1) || (direct0 && direct1);
+      const closed0 = this.isClosedFist(h0, p0);
+      const closed1 = this.isClosedFist(h1, p1);
+
+      if (clearLine) return { mode: 'line', handIndex: direct0 ? 0 : 1 };
+      if (fullFist0 && fullFist1) return { mode: 'fists', handIndex: 0 };
 
       if (!anyPinch || !anyHeld) {
-        // TWO INDEX FINGERS → LINE. This is index-only: remaining fingers closed.
-        // Direction does not matter: up, toward camera, toward each other, horizontal, diagonal.
-        const idx0 = this.isPointingHand(h0, p0);
-        const idx1 = this.isPointingHand(h1, p1);
-        if (idx0 && idx1) return { mode: 'line', handIndex: 0 };
-
-        const closed0 = this.isClosedFist(h0, p0);
-        const closed1 = this.isClosedFist(h1, p1);
+        // TWO INDEX FINGERS -> LINE. This must win before fist detection,
+        // because index-only hands can have low openness while the other
+        // fingers are closed.
         if (closed0 && closed1) return { mode: 'fists', handIndex: 0 };
 
-        // OPEN HANDS → CIRCLE. Full palms/fingers open, whether facing camera or each other.
+        if (direct0 || direct1) return { mode: 'line', handIndex: direct0 ? 0 : 1 };
+
+        if (this.formationMode === 'line' && !(closed0 && closed1) && (direct0 || direct1 || idx0 || idx1)) {
+          return { mode: 'line', handIndex: 0 };
+        }
+
         const open0 = this.isOpenPalm(h0, p0);
         const open1 = this.isOpenPalm(h1, p1);
         const bothOpenish = open0 && open1;
         if (bothOpenish) return { mode: 'circle', handIndex: 0 };
 
-        if (this.formationMode === 'line' && !(closed0 && closed1)) {
-          return { mode: 'line', handIndex: 0 };
-        }
-
         // Circle hysteresis: when palms rotate sideways or move closer, openness
         // can dip. Keep shrinking the existing circle unless the user clearly points.
-        if (this.formationMode === 'circle' && !(closed0 && closed1)) {
+        if (this.formationMode === 'circle' && !(closed0 && closed1) && !direct0 && !direct1) {
           return { mode: 'circle', handIndex: 0 };
         }
 
         return { mode: 'none', handIndex: 0 };
       }
+    }
+
+    if (tracked0 && h0 && !tracked1) {
+      const p0 = profiles[0];
+      if (this.isDirectionalLineHand(h0, p0)) return { mode: 'line', handIndex: 0 };
+      if (this.formationMode === 'line' && this.isPointingHand(h0, p0)) return { mode: 'line', handIndex: 0 };
+    }
+
+    if (tracked1 && h1 && !tracked0) {
+      const p1 = profiles[1];
+      if (this.isDirectionalLineHand(h1, p1)) return { mode: 'line', handIndex: 1 };
+      if (this.formationMode === 'line' && this.isPointingHand(h1, p1)) return { mode: 'line', handIndex: 1 };
     }
 
     return { mode: 'none', handIndex: 0 };
@@ -672,37 +881,23 @@ export class GlitchTilesEffect implements VfxEffect {
     if (n <= 0) return null;
 
     if (this.formationMode === 'circle') {
-      const lh0 = hands[0];
-      const lh1 = hands[1];
-      if (!lh0 || !lh1 || lh0.track === 'lost' || lh1.track === 'lost') return null;
-      // Center on the midpoint between the palms (more stable than the fingertips).
-      const cx = this.twoHandActive ? this.twoHandMidX : (lh0.palm.x + lh1.palm.x) * 0.5;
-      const cy = this.twoHandActive ? this.twoHandMidY : (lh0.palm.y + lh1.palm.y) * 0.5;
+      const ring = this.getCircleGeometry(hands);
+      if (!ring) return null;
 
       // Continuous swirl: the whole ring rotates rigidly so cards visibly circle
-      // each other. Each card keeps its stable base angle (orbitAngle) → no slot
+      // each other. Each card keeps its stable base angle (orbitAngle) -> no slot
       // wrap-jumps, the entire ring just spins.
-      const swirl = this.formationTime * 1.5;
-      const angle = c.orbitAngle + swirl;
+      const swirl = this.formationTime * 1.28;
+      const angle = (slot / n) * Math.PI * 2 + swirl - Math.PI * 0.5;
 
-      // Radius grows from PALM distance, because open-palm fingertips are noisy
-      // and change with finger pose. Palms are the stable intent signal here.
-      // Squashed vertically → tilted-ring perspective so it reads as a 3D orbit.
-      const smoothDist = this.twoHandActive ? this.twoHandPalmDist : Math.hypot(
-        lh1.palm.x - lh0.palm.x, lh1.palm.y - lh0.palm.y,
-      );
-      const rx = clamp(smoothDist * 0.45, 130, 390);
-      const ry = rx * 0.56;
-      const x = cx + Math.cos(angle) * rx;
-      const y = cy + Math.sin(angle) * ry;
+      const x = ring.cx + Math.cos(angle) * ring.rx;
+      const y = ring.cy + Math.sin(angle) * ring.ry;
 
-      // Depth from the ellipse: bottom of the ring (sin>0) is "near" → bigger + on top.
-      const front = (Math.sin(angle) + 1) / 2;     // 0 back … 1 front
-      c.formDepth = 0.6 + 0.55 * front;
-      // Bank slightly with the orbit while staying mostly upright/readable.
-      const rot = Math.cos(angle) * 0.28 + c.shardRot;
-      // Near cards track harder (snappier) than far ones for parallax life.
-      return { x, y, rot, stiffness: 300 + front * 90, damping: 34 };
+      c.formDepth = 1;
+      c.formScale = clamp(0.82 + ring.rx / 1500, 0.84, 1.04);
+      const rot = Math.cos(angle) * 0.08 + c.shardRot;
+      const snap = this.circleSnapT > 0;
+      return { x, y, rot, stiffness: snap ? 820 : 680, damping: snap ? 64 : 58 };
     }
 
     if (this.formationMode === 'fists') {
@@ -710,199 +905,139 @@ export class GlitchTilesEffect implements VfxEffect {
       const h1 = hands[1];
       if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') return null;
 
-      const leftCount = Math.ceil(n / 2);
-      const onLeft = slot < leftCount;
-      const localSlot = onLeft ? slot : slot - leftCount;
-      const localCount = onLeft ? leftCount : Math.max(1, n - leftCount);
-      const handForSlot = onLeft ? h0 : h1;
-      const cols = Math.min(4, Math.ceil(Math.sqrt(localCount)));
-      const col = localSlot % cols;
-      const row = Math.floor(localSlot / cols);
-      const rows = Math.max(1, Math.ceil(localCount / cols));
-      const spacingX = clamp(handForSlot.scale * 0.46, 34, 58);
-      const spacingY = clamp(handForSlot.scale * 0.38, 28, 48);
-      const stackDir = onLeft ? -1 : 1;
-      const x =
-        handForSlot.palm.x +
-        (col - (cols - 1) * 0.5) * spacingX +
-        stackDir * row * spacingX * 0.18;
-      const y =
-        handForSlot.palm.y +
-        (row - (rows - 1) * 0.5) * spacingY -
-        Math.abs(col - (cols - 1) * 0.5) * spacingY * 0.12;
-      const layer = localCount <= 1 ? 0 : localSlot / (localCount - 1);
-      c.formDepth = 0.86 + layer * 0.18;
+      const cols = 3;
+      const rows = 3;
+      const col = slot % cols;
+      const row = Math.floor(slot / cols);
+      const avgScale = (h0.scale + h1.scale) * 0.5;
+      const spacingX = clamp(c.w + avgScale * 0.06, 64, 82);
+      const spacingY = clamp(c.h + avgScale * 0.04, 78, 96);
+      const cx = (h0.palm.x + h1.palm.x) * 0.5;
+      const cy = (h0.palm.y + h1.palm.y) * 0.5 - clamp(avgScale * 0.14, 12, 34);
+      const x = cx + (col - 1) * spacingX;
+      const y = cy + (row - 1) * spacingY;
+      const layer = row / Math.max(1, rows - 1);
+      c.formDepth = 0.98 + layer * 0.04;
+      c.formScale = 1;
       return {
         x,
         y,
-        rot: stackDir * 0.08 + (col - (cols - 1) * 0.5) * 0.035 + c.shardRot,
-        stiffness: 360,
-        damping: 38,
+        rot: (col - 1) * 0.018 + (row - 1) * 0.012 + c.shardRot,
+        stiffness: 680,
+        damping: 58,
       };
     }
 
-    const hand = hands[this.formationHand];
-    if (!hand || hand.track === 'lost') return null;
-
     if (this.formationMode === 'line') {
-      let ax: number;
-      let ay: number;
-      let bx: number;
-      let by: number;
-
-      const h0 = hands[0];
-      const h1 = hands[1];
-      if (h0 && h1 && h0.track !== 'lost' && h1.track !== 'lost') {
-        const dx = h1.indexTip.x - h0.indexTip.x;
-        const dy = h1.indexTip.y - h0.indexTip.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const ux = dx / len;
-        const uy = dy / len;
-        const pad = clamp(len * 0.18, 36, 110);
-        ax = h0.indexTip.x - ux * pad;
-        ay = h0.indexTip.y - uy * pad;
-        bx = h1.indexTip.x + ux * pad;
-        by = h1.indexTip.y + uy * pad;
-      } else {
-        const wrist = hand.landmarks[0] ?? hand.palm;
-        let ux = hand.indexTip.x - wrist.x;
-        let uy = hand.indexTip.y - wrist.y;
-        const len = Math.hypot(ux, uy) || 1;
-        ux /= len; uy /= len;
-        const lineLen = clamp(hand.scale * 4.0, 260, 520);
-        const cx = hand.indexTip.x + ux * hand.scale * 0.55;
-        const cy = hand.indexTip.y + uy * hand.scale * 0.55;
-        ax = cx - ux * lineLen * 0.5;
-        ay = cy - uy * lineLen * 0.5;
-        bx = cx + ux * lineLen * 0.5;
-        by = cy + uy * lineLen * 0.5;
-      }
-
-      const rawDx = bx - ax;
-      const rawDy = by - ay;
-      if (Math.abs(rawDx) > 180 && Math.abs(rawDy) < Math.abs(rawDx) * 0.22) {
-        const y = (ay + by) * 0.5;
-        ay = y;
-        by = y;
-      }
-
+      const line = this.getLineGeometry(hands);
+      if (!line) return null;
+      const { ax, ay, bx, by, ux, uy } = line;
       const dx = bx - ax;
       const dy = by - ay;
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len;
-      const uy = dy / len;
       const px = -uy;
       const py = ux;
       const tt = n === 1 ? 0.5 : 0.06 + (slot / (n - 1)) * 0.88;  // small inset so ends aren't cramped
-      // A wave that travels DOWN the line (fast) = the "scrolling" shimmer. The
-      // line itself already follows the index↔index axis, so it's horizontal when
-      // the hands are level and diagonal when one index is raised.
-      const phase = this.formationTime * 4.2 - slot * 0.55;
-      const along = Math.cos(phase) * 11;   // slide along the axis
-      const wave = Math.sin(phase) * 7;     // perpendicular bob
+      // Keep line cards locked to the finger axis. Extra shimmer makes the
+      // guide look detached during fast length changes.
+      const along = 0;
+      const wave = 0;
+      c.formScale = 0.92;
       return {
         x: ax + dx * tt + ux * along + px * wave,
         y: ay + dy * tt + uy * along + py * wave,
         rot: Math.atan2(uy, ux) + c.shardRot,
-        stiffness: 320,
-        damping: 36,
+        stiffness: 1180,
+        damping: 78,
       };
-    }
-
-    if (this.formationMode === 'square') {
-      // Two-fist square: the fists frame the box. The line between the palms is
-      // one edge, so the square rotates naturally with how you hold your fists.
-      const twoFist = this.isTwoFistSquare(hands);
-      let ux: number;
-      let uy: number;
-      let vx: number;
-      let vy: number;
-      let side: number;
-      let cx: number;
-      let cy: number;
-
-      if (twoFist) {
-        const h0 = hands[0]!;
-        const h1 = hands[1]!;
-        let ex = h1.palm.x - h0.palm.x;
-        let ey = h1.palm.y - h0.palm.y;
-        const eLen = Math.hypot(ex, ey) || 1;
-        ex /= eLen; ey /= eLen;
-        ux = ex; uy = ey;
-        vx = -uy; vy = ux;
-        side = clamp(eLen, 180, 520);
-        // Center the square below the fist-line so the box hangs between the hands.
-        const mx = (h0.palm.x + h1.palm.x) * 0.5;
-        const my = (h0.palm.y + h1.palm.y) * 0.5;
-        cx = mx + vx * side * 0.5;
-        cy = my + vy * side * 0.5;
-      } else {
-        const thumb = hand.landmarks[4] ?? hand.palm;
-        const index = hand.landmarks[8] ?? hand.indexTip;
-        let lux = index.x - thumb.x;
-        let luy = index.y - thumb.y;
-        const uLen = Math.hypot(lux, luy) || 1;
-        lux /= uLen; luy /= uLen;
-        ux = lux; uy = luy;
-        vx = -uy; vy = ux;
-        side = clamp(Math.max(uLen * 2.15, hand.scale * 2.3), 180, 360);
-        cx = (thumb.x + index.x) * 0.5 + ux * side * 0.18;
-        cy = (thumb.y + index.y) * 0.5 + uy * side * 0.18;
-      }
-
-      const perSide = Math.max(1, Math.ceil(n / 4));
-      const edge = Math.floor(slot / perSide) % 4;
-      const local = ((slot % perSide) + 0.5) / perSide;
-      let ox = 0;
-      let oy = 0;
-      if (edge === 0) { ox = -side * 0.5 + local * side; oy = -side * 0.5; }
-      else if (edge === 1) { ox = side * 0.5; oy = -side * 0.5 + local * side; }
-      else if (edge === 2) { ox = side * 0.5 - local * side; oy = side * 0.5; }
-      else { ox = -side * 0.5; oy = side * 0.5 - local * side; }
-      const x = cx + ux * ox + vx * oy;
-      const y = cy + uy * ox + vy * oy;
-      const rot = Math.atan2(uy, ux) + (edge % 2 === 0 ? 0 : Math.PI / 2) + c.shardRot;
-      return { x, y, rot, stiffness: twoFist ? 300 : 245, damping: twoFist ? 34 : 32 };
-    }
-
-    if (this.formationMode === 'pack') {
-      const cols = Math.ceil(Math.sqrt(n));
-      const col = slot % cols;
-      const row = Math.floor(slot / cols);
-      const spacing = clamp(hand.scale * 0.28, 22, 42);
-      const fall = Math.min(140, this.formationTime * 180);
-      const jitter = Math.sin(c.seed + this.formationTime * 5) * 2;
-      const cx = hand.palm.x;
-      const cy = hand.palm.y + hand.scale * 0.55 + fall;
-      const x = cx + (col - (cols - 1) * 0.5) * spacing + jitter;
-      const y = cy + (row - (Math.ceil(n / cols) - 1) * 0.5) * spacing + jitter;
-      return { x, y, rot: c.shardRot + (slot - n * 0.5) * 0.03, stiffness: 150, damping: 18 };
     }
 
     return null;
   }
 
-  private shatterFormation(handIndex: number, hand: HandSignals): void {
-    this.shatterCooldown = 0.38;
-    this.formationAlpha = 0;
-    this.formationMode = 'none';
-    const speed = Math.hypot(hand.indexVel.x, hand.indexVel.y);
-    const impulseX = hand.indexVel.x * 0.85;
-    const impulseY = hand.indexVel.y * 0.85;
+  private getLineGeometry(hands: [HandSignals | null, HandSignals | null]): LineGeometry | null {
+    const h0 = hands[0];
+    const h1 = hands[1];
+    let ax: number;
+    let ay: number;
+    let bx: number;
+    let by: number;
 
-    for (const c of this.cards) {
-      if (c.held !== -1) continue;
-      const dx = c.x - hand.palm.x;
-      const dy = c.y - hand.palm.y;
+    if (h0 && h1 && h0.track !== 'lost' && h1.track !== 'lost') {
+      const dx = h1.indexTip.x - h0.indexTip.x;
+      const dy = h1.indexTip.y - h0.indexTip.y;
       const len = Math.hypot(dx, dy) || 1;
-      const radial = FORMATION_SHATTER_SPEED + Math.random() * 360 + speed * 0.18;
-      c.formationSlot = -1;
-      c.bridgeSlot = -1;
-      c.vx = impulseX + (dx / len) * radial + (Math.random() - 0.5) * 180;
-      c.vy = impulseY + (dy / len) * radial + (Math.random() - 0.5) * 180;
-      c.angVel = (Math.random() - 0.5) * 18 + (c.vx > 0 ? 1 : -1) * 3;
-      c.fire = Math.max(c.fire, clamp(speed / (FIRE_SPEED * 1.4), 0.25, 1));
+      const ux = dx / len;
+      const uy = dy / len;
+      const pad = clamp(len * 0.16, 32, 120);
+      ax = h0.indexTip.x - ux * pad;
+      ay = h0.indexTip.y - uy * pad;
+      bx = h1.indexTip.x + ux * pad;
+      by = h1.indexTip.y + uy * pad;
+    } else {
+      const hand = hands[this.formationHand];
+      if (!hand || hand.track === 'lost') return null;
+      const wrist = hand.landmarks[0] ?? hand.palm;
+      let ux = hand.indexTip.x - wrist.x;
+      let uy = hand.indexTip.y - wrist.y;
+      let len = Math.hypot(ux, uy);
+      if (len < hand.scale * 0.38) {
+        ux = hand.indexTip.x - this.w * 0.5;
+        uy = hand.indexTip.y - this.h * 0.5;
+        len = Math.hypot(ux, uy);
+      }
+      len ||= 1;
+      ux /= len;
+      uy /= len;
+      const lineLen = clamp(hand.scale * 5.8, 360, 740);
+      const cx = hand.indexTip.x + ux * hand.scale * 0.38;
+      const cy = hand.indexTip.y + uy * hand.scale * 0.38;
+      ax = cx - ux * lineLen * 0.5;
+      ay = cy - uy * lineLen * 0.5;
+      bx = cx + ux * lineLen * 0.5;
+      by = cy + uy * lineLen * 0.5;
     }
+
+    const rawDx = bx - ax;
+    const rawDy = by - ay;
+    if (Math.abs(rawDx) > 180 && Math.abs(rawDy) < Math.abs(rawDx) * 0.22) {
+      const y = (ay + by) * 0.5;
+      ay = y;
+      by = y;
+    }
+
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    return { ax, ay, bx, by, ux: dx / len, uy: dy / len, len };
+  }
+
+  private getCircleGeometry(hands: [HandSignals | null, HandSignals | null]): {
+    cx: number;
+    cy: number;
+    rx: number;
+    ry: number;
+  } | null {
+    const h0 = hands[0];
+    const h1 = hands[1];
+    if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') return null;
+
+    const rawDist = Math.hypot(
+      h1.palm.x - h0.palm.x,
+      h1.palm.y - h0.palm.y,
+    );
+    const smoothDist = this.twoHandActive
+      ? (this.circleSnapT > 0 ? this.twoHandRawPalmDist : this.twoHandPalmDist)
+      : rawDist;
+    const avgScale = (h0.scale + h1.scale) * 0.5;
+    const cx = this.twoHandActive ? this.twoHandMidX : (h0.palm.x + h1.palm.x) * 0.5;
+    const cy = this.twoHandActive ? this.twoHandMidY : (h0.palm.y + h1.palm.y) * 0.5;
+    const openR = clamp((smoothDist - clamp(avgScale * 0.2, 22, 48)) * 0.58, 118, 318);
+    const collapse = this.formationMode === 'circle' ? 0 : this.clapT;
+    const r = 6 + (openR - 6) * (1 - collapse * 0.96);
+    const rx = r;
+    const ry = r;
+
+    return { cx, cy, rx, ry };
   }
 
   draw(ctx: CanvasRenderingContext2D, video: HTMLVideoElement): void {
@@ -918,6 +1053,8 @@ export class GlitchTilesEffect implements VfxEffect {
     // 2. Palette dim treatment
     ctx.fillStyle = palette.bgTreatment;
     ctx.fillRect(0, 0, this.w, this.h);
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    ctx.fillRect(0, 0, this.w, this.h);
 
     // 3. Fire-trail canvas (screen = black is transparent)
     ctx.globalCompositeOperation = 'screen';
@@ -928,39 +1065,30 @@ export class GlitchTilesEffect implements VfxEffect {
     // 3.5 Formation HUD (behind cards, so cards sit ON the geometry)
     this.drawFormationHud(ctx);
 
-    // Video sample scale (canvas-space → true video pixels)
+    // Video sample scale (canvas-space -> true video pixels)
     const scaleX = video.videoWidth / this.w;
     const scaleY = video.videoHeight / this.h;
-    const isShard = this.config.params.tileShape === 'shard';
-
-    // 4. Cards. In circle swirl, draw back→front so near cards overlap far ones
-    //    (sells the 3D orbit). Other modes keep stable spawn order.
-    const drawList = (this.formationMode === 'circle' || this.formationMode === 'fists') && this.formationAlpha > 0.05
+    // 4. Cards. Fist grid keeps light depth sorting; circle stays flat on screen.
+    const drawList = this.formationMode === 'fists' && this.formationAlpha > 0.05
       ? [...this.cards].sort((a, b) => a.formDepth - b.formDepth)
       : this.cards;
     for (const c of drawList) {
-      const pop = easeOutBack(c.spawnT) * c.formDepth;
-      if (pop <= 0.01) continue;
+      const pop = easeOutBack(c.spawnT) * c.formDepth * c.formScale;
+      const cardAlpha = (1 - this.clapT) * c.formAlpha;
+      if (pop <= 0.01 || cardAlpha <= 0.01) continue;
 
       ctx.save();
       ctx.translate(c.x, c.y);
       ctx.rotate(c.rot);
       ctx.scale(pop, pop);
-
-      // Clap fade: cards become transparent as hands converge
-      if (this.clapT > 0) {
-        ctx.globalAlpha = 1 - this.clapT;
-      }
+      ctx.globalAlpha = cardAlpha;
 
       const hw = c.w / 2;
       const hh = c.h / 2;
+      const radius = Math.min(12, Math.max(9, c.w * 0.2));
 
       // Clip to card silhouette
-      if (isShard) {
-        this.shardPath(ctx, c);
-      } else {
-        roundRectPath(ctx, -hw, -hh, c.w, c.h, 14);
-      }
+      roundRectPath(ctx, -hw, -hh, c.w, c.h, radius);
       ctx.save();
       ctx.clip();
 
@@ -977,33 +1105,79 @@ export class GlitchTilesEffect implements VfxEffect {
       // Inner palette tint
       ctx.fillStyle = palette.bgTreatment;
       ctx.fillRect(-hw, -hh, c.w, c.h);
+      ctx.fillStyle = 'rgba(3,7,12,0.13)';
+      ctx.fillRect(-hw, -hh, c.w, c.h);
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.12 * cardAlpha;
+      ctx.fillStyle = c.accent;
+      ctx.fillRect(-hw, -hh, c.w, c.h);
+      const glassGlow = ctx.createLinearGradient(-hw, -hh, hw, hh);
+      glassGlow.addColorStop(0, 'rgba(255,255,255,0.42)');
+      glassGlow.addColorStop(0.2, 'rgba(255,255,255,0.14)');
+      glassGlow.addColorStop(0.62, 'rgba(255,255,255,0.035)');
+      glassGlow.addColorStop(1, 'rgba(255,255,255,0.2)');
+      ctx.globalAlpha = cardAlpha;
+      ctx.fillStyle = glassGlow;
+      ctx.fillRect(-hw, -hh, c.w, c.h);
+      ctx.globalAlpha = cardAlpha;
+      ctx.globalCompositeOperation = 'source-over';
 
       // Glass sheen — slides with rotation
       if (this.useSheen) {
         ctx.globalCompositeOperation = 'screen';
-        ctx.globalAlpha = 0.18 * (1 - this.clapT);
+        ctx.globalAlpha = 0.3 * cardAlpha;
         const off = Math.sin(c.rot * 1.5 + c.seed) * hw * 0.6;
         ctx.drawImage(this.sheen, -hw + off, -hh, c.w, c.h);
-        ctx.globalAlpha = 1 - this.clapT;
+        ctx.globalAlpha = cardAlpha;
         ctx.globalCompositeOperation = 'source-over';
       }
+
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.5 * cardAlpha;
+      ctx.strokeStyle = 'rgba(255,255,255,0.78)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-hw + radius, -hh + 2);
+      ctx.lineTo(hw - radius, -hh + 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.3 * cardAlpha;
+      ctx.beginPath();
+      ctx.moveTo(-hw + 2, -hh + radius);
+      ctx.lineTo(-hw + 2, hh - radius);
+      ctx.stroke();
+      ctx.globalAlpha = 0.16 * cardAlpha;
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.beginPath();
+      ctx.moveTo(-hw + radius, hh - 2);
+      ctx.lineTo(hw - radius, hh - 2);
+      ctx.stroke();
+      ctx.globalAlpha = cardAlpha;
+      ctx.globalCompositeOperation = 'source-over';
       ctx.restore(); // undo clip
 
       // Border + glow (re-path; clip is gone)
-      if (isShard) this.shardPath(ctx, c);
-      else roundRectPath(ctx, -hw, -hh, c.w, c.h, 14);
+      roundRectPath(ctx, -hw, -hh, c.w, c.h, radius);
 
       if (c.fire > 0.05) {
         ctx.strokeStyle = lerpColor(this.primary, this.emberColor, c.fire);
         ctx.lineWidth = 2 + c.fire * 2;
         if (this.useShadow) { ctx.shadowBlur = 14 + c.fire * 26; ctx.shadowColor = this.emberColor; }
       } else {
-        ctx.strokeStyle = this.primary;
-        ctx.lineWidth = 2;
-        if (this.useShadow) { ctx.shadowBlur = 12; ctx.shadowColor = this.glow; }
+        ctx.strokeStyle = lerpColor(c.accent, this.primary, 0.28);
+        ctx.lineWidth = 1.25;
+        if (this.useShadow) { ctx.shadowBlur = 18; ctx.shadowColor = c.accent; }
       }
       ctx.stroke();
       ctx.shadowBlur = 0;
+
+      if (c.fire <= 0.05) {
+        roundRectPath(ctx, -hw + 1.5, -hh + 1.5, c.w - 3, c.h - 3, Math.max(6, radius - 2));
+        ctx.globalAlpha = 0.54 * cardAlpha;
+        ctx.strokeStyle = 'rgba(255,255,255,0.78)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.globalAlpha = cardAlpha;
+      }
 
       ctx.restore();
     }
@@ -1014,7 +1188,6 @@ export class GlitchTilesEffect implements VfxEffect {
     // 6. Lightweight mode readout, matching the reference screenshots.
     this.drawModeHud(ctx);
   }
-
   private shardPath(ctx: CanvasRenderingContext2D, c: Card): void {
     const hw = c.w / 2;
     const hh = c.h / 2;
@@ -1037,74 +1210,34 @@ export class GlitchTilesEffect implements VfxEffect {
     if (this.useShadow) { ctx.shadowBlur = 12; ctx.shadowColor = this.glow; }
 
     if (this.formationMode === 'line') {
-      const h0 = this.latestHands[0];
-      const h1 = this.latestHands[1];
-      let ax = 0, ay = 0, bx = 0, by = 0;
-      if (h0 && h1 && h0.track !== 'lost' && h1.track !== 'lost') {
-        const dx = h1.indexTip.x - h0.indexTip.x;
-        const dy = h1.indexTip.y - h0.indexTip.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const ux = dx / len;
-        const uy = dy / len;
-        const pad = clamp(len * 0.18, 36, 110);
-        ax = h0.indexTip.x - ux * pad; ay = h0.indexTip.y - uy * pad;
-        bx = h1.indexTip.x + ux * pad; by = h1.indexTip.y + uy * pad;
-      } else {
-        const hand = this.latestHands[this.formationHand];
-        if (!hand || hand.track === 'lost') { ctx.restore(); return; }
-        const wrist = hand.landmarks[0] ?? hand.palm;
-        let ux = hand.indexTip.x - wrist.x;
-        let uy = hand.indexTip.y - wrist.y;
-        const len = Math.hypot(ux, uy) || 1;
-        ux /= len; uy /= len;
-        const lineLen = clamp(hand.scale * 4.0, 260, 520);
-        const cx = hand.indexTip.x + ux * hand.scale * 0.55;
-        const cy = hand.indexTip.y + uy * hand.scale * 0.55;
-        ax = cx - ux * lineLen * 0.5; ay = cy - uy * lineLen * 0.5;
-        bx = cx + ux * lineLen * 0.5; by = cy + uy * lineLen * 0.5;
-      }
-
-      const rawDx = bx - ax;
-      const rawDy = by - ay;
-      if (Math.abs(rawDx) > 180 && Math.abs(rawDy) < Math.abs(rawDx) * 0.22) {
-        const y = (ay + by) * 0.5;
-        ay = y;
-        by = y;
-      }
-
+      const line = this.getLineGeometry(this.latestHands);
+      if (!line) { ctx.restore(); return; }
+      const { ax, ay, bx, by, len } = line;
       const dx = bx - ax;
       const dy = by - ay;
-      const len = Math.hypot(dx, dy) || 1;
       const px = -dy / len;
       const py = dx / len;
-      ctx.strokeStyle = `rgba(255,255,255,${0.34 * a})`;
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.22 * a})`;
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
       ctx.stroke();
-      ctx.strokeStyle = `rgba(255,255,255,${0.16 * a})`;
-      ctx.lineWidth = 5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.08 * a})`;
+      ctx.lineWidth = 3.5;
       ctx.beginPath();
       ctx.moveTo(ax + px * 0.5, ay + py * 0.5);
       ctx.lineTo(bx + px * 0.5, by + py * 0.5);
       ctx.stroke();
       ctx.globalAlpha = 1;
     } else if (this.formationMode === 'circle') {
-      const h0 = this.latestHands[0];
-      const h1 = this.latestHands[1];
-      if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') { ctx.restore(); return; }
-      // Match the tilted orbit the cards actually fly on (palms midpoint, ellipse).
-      const cx = (h0.palm.x + h1.palm.x) * 0.5;
-      const cy = (h0.palm.y + h1.palm.y) * 0.5;
-      const dist = Math.hypot(h1.palm.x - h0.palm.x, h1.palm.y - h0.palm.y);
-      const rx = clamp(dist * 0.45, 130, 390);
-      const ry = rx * 0.56;
+      const ring = this.getCircleGeometry(this.latestHands);
+      if (!ring) { ctx.restore(); return; }
       const swirl = this.formationTime * 1.5;
       ctx.strokeStyle = `rgba(255,255,255,${0.24 * a})`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.ellipse(ring.cx, ring.cy, ring.rx, ring.ry, 0, 0, Math.PI * 2);
       ctx.stroke();
       // Rotating tick marks ride the swirl so the ring reads as spinning.
       ctx.globalAlpha = 0.18 * a;
@@ -1115,86 +1248,11 @@ export class GlitchTilesEffect implements VfxEffect {
         const ca = Math.cos(ang);
         const sa = Math.sin(ang);
         ctx.beginPath();
-        ctx.moveTo(cx + ca * (rx - 10), cy + sa * (ry - 6));
-        ctx.lineTo(cx + ca * (rx + 10), cy + sa * (ry + 6));
+        ctx.moveTo(ring.cx + ca * (ring.rx - 10), ring.cy + sa * (ring.ry - 6));
+        ctx.lineTo(ring.cx + ca * (ring.rx + 10), ring.cy + sa * (ring.ry + 6));
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
-    } else {
-      const hand = this.latestHands[this.formationHand];
-      if (!hand || hand.track === 'lost') { ctx.restore(); return; }
-
-      if (this.formationMode === 'square') {
-        let ux: number;
-        let uy: number;
-        let vx: number;
-        let vy: number;
-        let side: number;
-        let cx: number;
-        let cy: number;
-        if (this.isTwoFistSquare(this.latestHands)) {
-          const h0 = this.latestHands[0]!;
-          const h1 = this.latestHands[1]!;
-          let ex = h1.palm.x - h0.palm.x;
-          let ey = h1.palm.y - h0.palm.y;
-          const eLen = Math.hypot(ex, ey) || 1;
-          ex /= eLen; ey /= eLen;
-          ux = ex; uy = ey;
-          vx = -uy; vy = ux;
-          side = clamp(eLen, 180, 520);
-          cx = (h0.palm.x + h1.palm.x) * 0.5 + vx * side * 0.5;
-          cy = (h0.palm.y + h1.palm.y) * 0.5 + vy * side * 0.5;
-        } else {
-          const thumb = hand.landmarks[4] ?? hand.palm;
-          const index = hand.landmarks[8] ?? hand.indexTip;
-          let lux = index.x - thumb.x;
-          let luy = index.y - thumb.y;
-          const uLen = Math.hypot(lux, luy) || 1;
-          lux /= uLen; luy /= uLen;
-          ux = lux; uy = luy;
-          vx = -uy; vy = ux;
-          side = clamp(Math.max(uLen * 2.15, hand.scale * 2.3), 180, 360);
-          cx = (thumb.x + index.x) * 0.5 + ux * side * 0.18;
-          cy = (thumb.y + index.y) * 0.5 + uy * side * 0.18;
-        }
-        const corners = [
-          { x: cx + ux * -side * 0.5 + vx * -side * 0.5, y: cy + uy * -side * 0.5 + vy * -side * 0.5 },
-          { x: cx + ux * side * 0.5 + vx * -side * 0.5, y: cy + uy * side * 0.5 + vy * -side * 0.5 },
-          { x: cx + ux * side * 0.5 + vx * side * 0.5, y: cy + uy * side * 0.5 + vy * side * 0.5 },
-          { x: cx + ux * -side * 0.5 + vx * side * 0.5, y: cy + uy * -side * 0.5 + vy * side * 0.5 },
-        ];
-        ctx.strokeStyle = `rgba(255,255,255,${0.32 * a})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(corners[0].x, corners[0].y);
-        for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.strokeStyle = this.glow;
-        ctx.globalAlpha = 0.25 * a;
-        ctx.beginPath();
-        ctx.moveTo(corners[0].x, corners[0].y);
-        ctx.lineTo(corners[2].x, corners[2].y);
-        ctx.moveTo(corners[1].x, corners[1].y);
-        ctx.lineTo(corners[3].x, corners[3].y);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      } else if (this.formationMode === 'pack') {
-        const cx = hand.palm.x;
-        const cy = hand.palm.y + hand.scale * 0.55 + Math.min(140, this.formationTime * 180);
-        const r = clamp(hand.scale * 0.75, 55, 105);
-        ctx.strokeStyle = `rgba(255,255,255,${0.45 * a})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.globalAlpha = 0.3 * a;
-        ctx.beginPath();
-        ctx.moveTo(cx, hand.palm.y);
-        ctx.lineTo(cx, cy + r);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
     }
 
     ctx.shadowBlur = 0;
@@ -1233,7 +1291,7 @@ export class GlitchTilesEffect implements VfxEffect {
     const mode =
       this.formationMode === 'circle' ? 'CODEX GLITCH CIRCLE SWIRL' :
       this.formationMode === 'line' ? 'CODEX GLITCH CARD LINE' :
-      this.formationMode === 'fists' ? 'CODEX GLITCH FIST ORBITS' :
+      this.formationMode === 'fists' ? 'CODEX GLITCH 3X3 GRID' :
       'CODEX GLITCH FIELD';
 
     ctx.save();
@@ -1248,7 +1306,7 @@ export class GlitchTilesEffect implements VfxEffect {
     ctx.fillText(`HANDS ${handsVisible}  ·  PALM DISTANCE ${palmDistance.toFixed(2)}  ·  ENERGY ${energy}%`, 12, 42);
     ctx.font = '700 10px monospace';
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('OPEN PALMS FOR CIRCLE · TWO INDEX-ONLY FINGERS FOR LINE · TWO FISTS FOR CARD SHIELDS', 12, 62);
+    ctx.fillText('OPEN PALMS FOR CIRCLE · TWO INDEX-ONLY FINGERS FOR LINE · TWO FISTS FOR 3X3 GRID', 12, 62);
     ctx.restore();
   }
 

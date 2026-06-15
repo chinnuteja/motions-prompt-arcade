@@ -29,8 +29,8 @@ export const PALETTES: Record<PaletteId, PaletteColors> = {
 export const EFFECT_META: Record<EffectType, { gestureHint: string; idleBehavior: string }> = {
   glitch_tiles:    { gestureHint: 'open palms for circle · two index-only fingers for line · two fists for card shields', idleBehavior: 'settle' },
   particle_nebula: { gestureHint: 'open palms form atom core · fists gather hand orbits', idleBehavior: 'drift' },
-  aura_blaster:    { gestureHint: 'fist to charge sphere · open palm to blast beam', idleBehavior: 'fade' },
-  fire_magic:      { gestureHint: 'fist to charge the flame · open to erupt', idleBehavior: 'flicker' },
+  aura_blaster:    { gestureHint: 'fist charge · open god beam · two fists then both open for ultimate', idleBehavior: 'fade' },
+  fire_magic:      { gestureHint: 'fist condenses flame · open releases directional fire', idleBehavior: 'flicker' },
 };
 
 // ─── Config Interfaces ──────────────────────────────────────────

@@ -4,7 +4,7 @@ import { EffectConfig, FireMagicConfig, PALETTES } from '../vfx-schema';
 import { curlNoise, expDamp, buildFireRamp, makeFlameSprite, makeGlowSprite, EmberPool, PingPongCanvas, clamp } from './fxUtils';
 
 const BLOB_COUNTS = [220, 300, 380];
-const RING_LIFE = 0.35; // seconds an eruption shockwave ring lives
+const SHOCK_LOBE_LIFE = 0.42; // seconds the directional eruption pressure licks live
 
 interface HandBasis {
   palmX: number;
@@ -25,6 +25,20 @@ interface HeatSource {
   vy: number;
   spread: number;
   radius: number;
+}
+
+interface ShockLobe {
+  x: number;
+  y: number;
+  fx: number;
+  fy: number;
+  sx: number;
+  sy: number;
+  age: number;
+  life: number;
+  length: number;
+  width: number;
+  charge: number;
 }
 
 export class FireMagicEffect implements VfxEffect {
@@ -49,9 +63,11 @@ export class FireMagicEffect implements VfxEffect {
   private wasFist = [false, false];
   private flash = [0, 0];                              // eruption flash decay, per hand
   private lastBasis: (HandBasis | null)[] = [null, null];
+  private emitterCarry = [0, 0];                       // fractional deterministic stream emitters
+  private burstCursor = 0;                             // overwrite cursor for one-shot seeded blobs
 
-  // One-shot eruption shockwave rings (tiny array, ≤2 live)
-  private rings: { x: number; y: number; age: number; max: number }[] = [];
+  // One-shot directional pressure licks. No perfect circles: the release follows the hand.
+  private shockLobes: ShockLobe[] = [];
 
   // Carried into draw() so trail fade uses the real frame time, not a guess
   private lastDt = 1 / 60;
@@ -139,6 +155,7 @@ export class FireMagicEffect implements VfxEffect {
         this.charge[hi] = 0;
         this.wasFist[hi] = false;
         this.lastBasis[hi] = null;
+        this.emitterCarry[hi] = 0;
         continue;
       }
 
@@ -160,23 +177,32 @@ export class FireMagicEffect implements VfxEffect {
         this.wasFist[hi] = false;
 
         const chg = this.charge[hi];
-        const burstMag = 1500 + 1200 * chg;
+        const burstMag = (1550 + 1450 * chg) * (isPlasma ? 1.15 : 1);
         // Capture scales with hand size so eruptions read the same near or far from camera.
-        const captureR = Math.max(150, basis.scale * 2.8);
+        // The capture is cone-shaped, so the blast feels released from the palm instead of
+        // stamped as a flat circular UI ripple.
+        const captureR = Math.max(190, basis.scale * (3.2 + chg * 1.8));
+        const baseWidth = Math.max(58, basis.scale * (0.7 + chg * 0.25));
         for (let i = 0; i < this.cap; i++) {
           const dx = this.x[i] - hand.palm.x;
           const dy = this.y[i] - hand.palm.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          if (dist < captureR) {
-            this.heat[i] = 1;
-            const contour = ((dx * basis.sideX + dy * basis.sideY) / Math.max(1, basis.scale)) * 0.35;
-            this.vx[i] += basis.forwardX * burstMag + basis.sideX * contour * burstMag + (dx / dist) * burstMag * 0.35;
-            this.vy[i] += basis.forwardY * burstMag + basis.sideY * contour * burstMag - burstMag * 0.18;
+          const axial = dx * basis.forwardX + dy * basis.forwardY;
+          const lateral = dx * basis.sideX + dy * basis.sideY;
+          const forwardT = clamp((axial + basis.scale * 0.65) / captureR, 0, 1);
+          const coneWidth = baseWidth + forwardT * basis.scale * (1.25 + chg);
+          if (axial > -basis.scale * 1.15 && axial < captureR && Math.abs(lateral) < coneWidth) {
+            const edge = 1 - Math.abs(lateral) / coneWidth;
+            const thrust = burstMag * (0.62 + 0.55 * edge) * (1 - forwardT * 0.28);
+            const sideKick = (lateral / Math.max(1, coneWidth)) * burstMag * 0.42;
+            this.heat[i] = Math.max(this.heat[i], 0.82 + chg * 0.22);
+            this.vx[i] += basis.forwardX * thrust + basis.sideX * sideKick;
+            this.vy[i] += basis.forwardY * thrust + basis.sideY * sideKick - 90 * (1 - forwardT);
           }
         }
         // The payoff: a flash at the palm, an expanding heat ripple, and a shower of sparks.
         this.flash[hi] = 1;
-        this.pushRing(hand.palm.x, hand.palm.y, basis.scale * 6);
+        this.seedEruptionCone(hand, basis, chg);
+        this.pushShockLobe(basis, chg);
         this.emberBurst(hand, basis, chg);
         this.charge[hi] = 0;
       } else if (isOpen) {
@@ -187,8 +213,9 @@ export class FireMagicEffect implements VfxEffect {
       // Continuous fire logic
       if (isOpen) {
         if (this.config.params.eruption === 'flamethrower' && !eruptingThisFrame) {
-          // Tight ribbon of sources along the knuckles
-          for (const src of this.handContourSources(hand, basis, 1.0, 1350)) activeSources.push(src);
+          // Layered palm stream: dense core, rolling side flame, and knuckle contour.
+          for (const src of this.flamethrowerSources(hand, basis)) activeSources.push(src);
+          this.injectFlamethrower(hand, basis, hi, dt, ramp);
         } else if (this.config.params.eruption === 'burst' && !eruptingThisFrame) {
           // Fingertip jets! Fire shoots continuously from fingertips
           const fingertips = [8, 12, 16, 20];
@@ -304,7 +331,7 @@ export class FireMagicEffect implements VfxEffect {
       const speed = Math.hypot(this.vx[i], this.vy[i]);
       const combustion = 1 - heatDamp;
       const fastTear = clamp(speed / 1800, 0, 0.55);
-      const edgeLoss = this.y[i] < 0 || this.x[i] < 0 || this.x[i] > this.w ? 0.35 : 0;
+      const edgeLoss = this.y[i] < 0 || this.y[i] > this.h || this.x[i] < 0 || this.x[i] > this.w ? 0.35 : 0;
       const condensed = fistDist <= 95 ? 0.45 : 1;
       this.heat[i] -= this.heat[i] * (combustion * condensed + fastTear * dt * 3.0 + edgeLoss);
       if (this.heat[i] < 0.012) this.resetBlob(i);
@@ -314,16 +341,87 @@ export class FireMagicEffect implements VfxEffect {
     for (let hi = 0; hi < 2; hi++) {
       if (this.flash[hi] > 0) this.flash[hi] = Math.max(0, this.flash[hi] - dt * 5);
     }
-    for (let r = this.rings.length - 1; r >= 0; r--) {
-      this.rings[r].age += dt;
-      if (this.rings[r].age > RING_LIFE) this.rings.splice(r, 1);
+    for (let r = this.shockLobes.length - 1; r >= 0; r--) {
+      this.shockLobes[r].age += dt;
+      if (this.shockLobes[r].age > this.shockLobes[r].life) this.shockLobes.splice(r, 1);
     }
     this.embers.step(dt, -160, 1.5);
   }
 
-  private pushRing(x: number, y: number, max: number): void {
-    this.rings.push({ x, y, age: 0, max });
-    if (this.rings.length > 2) this.rings.shift();
+  private pushShockLobe(basis: HandBasis, charge: number): void {
+    const length = clamp(basis.scale * (4.6 + charge * 4.2), 260, 760);
+    const width = clamp(basis.scale * (1.0 + charge * 1.45), 90, 340);
+    this.shockLobes.push({
+      x: basis.palmX,
+      y: basis.palmY,
+      fx: basis.forwardX,
+      fy: basis.forwardY,
+      sx: basis.sideX,
+      sy: basis.sideY,
+      age: 0,
+      life: SHOCK_LOBE_LIFE + charge * 0.12,
+      length,
+      width,
+      charge,
+    });
+    if (this.shockLobes.length > 4) this.shockLobes.shift();
+  }
+
+  private nextBurstSlot(): number {
+    for (let a = 0; a < this.cap; a++) {
+      const idx = (this.burstCursor + a) % this.cap;
+      if (this.heat[idx] < 0.28) {
+        this.burstCursor = (idx + 1) % this.cap;
+        return idx;
+      }
+    }
+    const idx = this.burstCursor % this.cap;
+    this.burstCursor = (this.burstCursor + 1) % this.cap;
+    return idx;
+  }
+
+  private seedBlob(
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    heat: number,
+    radiusMul: number,
+  ): void {
+    const i = this.nextBurstSlot();
+    this.resetBlob(i, x, y, vx, vy, clamp(heat, 0, 1));
+    this.r[i] *= radiusMul;
+  }
+
+  private seedEruptionCone(hand: HandSignals, basis: HandBasis, charge: number): void {
+    const isPlasma = this.config.params.form === 'plasma';
+    const count = Math.floor((isPlasma ? 72 : 96) + 76 * charge);
+    const length = clamp(basis.scale * (5.2 + charge * (isPlasma ? 3.2 : 4.1)), 330, 880);
+    const widthBase = basis.scale * (isPlasma ? 0.28 : 0.42);
+    const widthGrow = basis.scale * (isPlasma ? 1.05 : 1.62) * (0.75 + charge * 0.5);
+    const thrustBase = (isPlasma ? 1420 : 1180) + charge * (isPlasma ? 1250 : 1040);
+
+    for (let i = 0; i < count; i++) {
+      const u = Math.pow(Math.random(), 0.58);
+      const axial = basis.scale * 0.18 + u * length;
+      const width = widthBase + widthGrow * Math.sin(u * Math.PI * 0.88);
+      const sideNorm = (Math.random() - 0.5) * 2;
+      const lick = Math.sin(i * 1.73 + u * 9.0) * width * 0.12;
+      const lateral = sideNorm * width * (0.18 + Math.random() * 0.82) + lick;
+      const px = hand.palm.x + basis.forwardX * axial + basis.sideX * lateral;
+      const py = hand.palm.y + basis.forwardY * axial + basis.sideY * lateral;
+      const edge = 1 - Math.min(1, Math.abs(lateral) / Math.max(1, width));
+      const speed = thrustBase * (1.05 - u * 0.28) * (0.78 + Math.random() * 0.42);
+      const sideKick = sideNorm * (260 + 420 * charge) * (1 - u * 0.45);
+      this.seedBlob(
+        px,
+        py,
+        basis.forwardX * speed + basis.sideX * sideKick + hand.indexVel.x * 0.16,
+        basis.forwardY * speed + basis.sideY * sideKick + hand.indexVel.y * 0.16 - (80 + 180 * u),
+        0.72 + edge * 0.34 + charge * 0.12 - u * 0.18,
+        (isPlasma ? 0.62 : 0.82) + edge * 0.45,
+      );
+    }
   }
 
   private emberBurst(hand: HandSignals, basis: HandBasis, charge: number): void {
@@ -391,6 +489,84 @@ export class FireMagicEffect implements VfxEffect {
     return sources;
   }
 
+  private flamethrowerSources(hand: HandSignals, basis: HandBasis): HeatSource[] {
+    const isPlasma = this.config.params.form === 'plasma';
+    const speed = isPlasma ? 1680 : 1450;
+    const sources = this.handContourSources(hand, basis, 1.0, speed);
+    const coreHeat = isPlasma ? 1.05 : 0.96;
+    const coreSpread = clamp(basis.scale * (isPlasma ? 0.16 : 0.24), 12, 34);
+
+    for (let lane = -1; lane <= 1; lane++) {
+      const side = lane * basis.scale * (isPlasma ? 0.12 : 0.18);
+      const laneSpeed = speed * (lane === 0 ? 1.08 : 0.86);
+      sources.push({
+        x: basis.palmX + basis.forwardX * basis.scale * 0.2 + basis.sideX * side,
+        y: basis.palmY + basis.forwardY * basis.scale * 0.2 + basis.sideY * side,
+        h: coreHeat,
+        vx: basis.forwardX * laneSpeed + basis.sideX * lane * 180 + hand.indexVel.x * 0.2,
+        vy: basis.forwardY * laneSpeed + basis.sideY * lane * 180 + hand.indexVel.y * 0.2 - 95,
+        spread: coreSpread,
+        radius: lane === 0 ? 0.9 : 0.72,
+      });
+    }
+
+    return sources;
+  }
+
+  private injectFlamethrower(
+    hand: HandSignals,
+    basis: HandBasis,
+    handIndex: number,
+    dt: number,
+    ramp: number,
+  ): void {
+    if (ramp <= 0.02) return;
+
+    const isPlasma = this.config.params.form === 'plasma';
+    const intensityBoost = 0.82 + this.config.intensity * 0.16;
+    const rate = (isPlasma ? 105 : 132) * intensityBoost * ramp;
+    this.emitterCarry[handIndex] += rate * dt;
+    const n = Math.min(9, Math.floor(this.emitterCarry[handIndex]));
+    this.emitterCarry[handIndex] -= n;
+
+    const fingertips = [8, 12, 16, 20];
+    for (let i = 0; i < n; i++) {
+      const fromPalmCore = Math.random() < 0.48;
+      const lm = fromPalmCore
+        ? hand.palm
+        : (hand.landmarks[fingertips[Math.floor(Math.random() * fingertips.length)]] || hand.palm);
+      const u = Math.random();
+      const sideNorm = (Math.random() - 0.5) * 2;
+      const width = basis.scale * (isPlasma ? 0.42 : 0.72) * (0.35 + u);
+      const axialJitter = basis.scale * (fromPalmCore ? 0.18 + u * 0.28 : 0.04);
+      const px = lm.x + basis.forwardX * axialJitter + basis.sideX * sideNorm * width * 0.42;
+      const py = lm.y + basis.forwardY * axialJitter + basis.sideY * sideNorm * width * 0.42;
+      const speed = (isPlasma ? 1540 : 1320) * (0.85 + Math.random() * 0.55);
+      const sideKick = sideNorm * (isPlasma ? 260 : 390) * (0.55 + Math.random() * 0.75);
+      const heat = (isPlasma ? 0.92 : 0.82) + Math.random() * 0.18;
+
+      this.seedBlob(
+        px,
+        py,
+        basis.forwardX * speed + basis.sideX * sideKick + hand.indexVel.x * 0.18,
+        basis.forwardY * speed + basis.sideY * sideKick + hand.indexVel.y * 0.18 - (isPlasma ? 60 : 130),
+        heat,
+        fromPalmCore ? (isPlasma ? 0.7 : 0.96) : (isPlasma ? 0.52 : 0.68),
+      );
+
+      if (Math.random() < 0.18) {
+        this.embers.spawn(
+          px,
+          py,
+          basis.forwardX * speed * 0.28 + basis.sideX * sideKick * 0.55,
+          basis.forwardY * speed * 0.28 + basis.sideY * sideKick * 0.55 - 120,
+          0.42 + Math.random() * 0.55,
+          2.5 + Math.random() * 3.5,
+        );
+      }
+    }
+  }
+
   private microCurl(x: number, y: number, t: number): { x: number; y: number } {
     const s1 = 0.027;
     const s2 = 0.043;
@@ -400,14 +576,9 @@ export class FireMagicEffect implements VfxEffect {
   }
 
   draw(ctx: CanvasRenderingContext2D, video: HTMLVideoElement): void {
-    // 1. Draw video background (since effectIncludesVideo = false)
-    ctx.save();
-    ctx.scale(-1, 1);
-    ctx.translate(-this.w, 0);
-    ctx.drawImage(video, 0, 0, this.w, this.h);
-    ctx.restore();
+    void video;
 
-    // Darken background so fire pops
+    // 1. Darken the engine-drawn video background so fire pops.
     ctx.fillStyle = this.bgTreatment;
     ctx.fillRect(0, 0, this.w, this.h);
 
@@ -480,17 +651,53 @@ export class FireMagicEffect implements VfxEffect {
       }
     }
 
-    // Eruption shockwave rings — additive strokes that the feedback loop smears into ripples.
+    // Directional pressure licks. These replace the old perfect circle shockwave.
     writeCtx.strokeStyle = this.ringColor;
-    for (const ring of this.rings) {
-      const p = ring.age / RING_LIFE;
+    writeCtx.lineCap = 'round';
+    writeCtx.lineJoin = 'round';
+    const lineScale = (hw + hh) * 0.5;
+    const now = performance.now() * 0.001;
+    for (const lobe of this.shockLobes) {
+      const p = lobe.age / lobe.life;
       if (p >= 1) continue;
-      const ease = 1 - (1 - p) * (1 - p);
-      writeCtx.globalAlpha = (1 - p) * 0.55;
-      writeCtx.lineWidth = Math.max(1, 6 * (1 - p)) * hw;
-      writeCtx.beginPath();
-      writeCtx.arc(ring.x * hw, ring.y * hh, ring.max * ease * hw, 0, Math.PI * 2);
-      writeCtx.stroke();
+      const ease = 1 - Math.pow(1 - p, 3);
+      const alpha = (1 - p) * (0.22 + lobe.charge * 0.34);
+
+      for (let lane = -2; lane <= 2; lane++) {
+        const laneNorm = lane / 2;
+        const laneFade = 1 - Math.abs(laneNorm) * 0.34;
+        const wiggle = Math.sin(now * 18 + lane * 2.1 + p * 9.0) * lobe.width * 0.08 * (1 - p);
+        const startSide = laneNorm * lobe.width * 0.08;
+        const midSide = laneNorm * lobe.width * (0.52 + p * 0.36) + wiggle;
+        const endSide = laneNorm * lobe.width * (0.9 + p * 0.4) + wiggle * 1.5;
+        const len = lobe.length * ease * (lane === 0 ? 1 : 0.82 + Math.abs(laneNorm) * 0.16);
+
+        const x0 = (lobe.x + lobe.sx * startSide) * hw;
+        const y0 = (lobe.y + lobe.sy * startSide) * hh;
+        const cx = (lobe.x + lobe.fx * len * 0.48 + lobe.sx * midSide) * hw;
+        const cy = (lobe.y + lobe.fy * len * 0.48 + lobe.sy * midSide - 34 * (1 - p)) * hh;
+        const x1 = (lobe.x + lobe.fx * len + lobe.sx * endSide) * hw;
+        const y1 = (lobe.y + lobe.fy * len + lobe.sy * endSide - 58 * p) * hh;
+
+        writeCtx.globalAlpha = alpha * laneFade;
+        writeCtx.lineWidth = Math.max(1, (10 - Math.abs(lane) * 2.2) * (1 - p) * lineScale);
+        writeCtx.beginPath();
+        writeCtx.moveTo(x0, y0);
+        writeCtx.quadraticCurveTo(cx, cy, x1, y1);
+        writeCtx.stroke();
+      }
+
+      if (p < 0.72) {
+        for (let s = 0; s < 3; s++) {
+          const q = (s + 1) / 4 * ease;
+          const wobble = Math.sin(now * 22 + s * 1.9) * lobe.width * 0.1 * (1 - p);
+          const px = (lobe.x + lobe.fx * lobe.length * q + lobe.sx * wobble) * hw;
+          const py = (lobe.y + lobe.fy * lobe.length * q + lobe.sy * wobble - 32 * p) * hh;
+          const rr = (28 + lobe.charge * 38) * (1 - p) * lineScale;
+          writeCtx.globalAlpha = alpha * 0.65;
+          writeCtx.drawImage(this.sprites.core, px - rr, py - rr, rr * 2, rr * 2);
+        }
+      }
     }
     writeCtx.globalAlpha = 1;
 

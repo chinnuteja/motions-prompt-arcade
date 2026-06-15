@@ -80,7 +80,7 @@ export default function VfxLandingPage() {
     {
       id: "fire_magic",
       title: "Fire Magic",
-      description: "Fluid plasma physics with hand-contour mapping, twist shear, and explosive eruptions.",
+      description: "Condense flame in your fist, then open your hand into directional eruptions, flamethrower streams, and fingertip jets.",
       prompt: "Give me intense orange fire I can charge in my fist and blast like a flamethrower",
       gradient: "linear-gradient(135deg, #ff4e00, #ec9f05)"
     },
@@ -101,7 +101,7 @@ export default function VfxLandingPage() {
     {
       id: "aura_blaster",
       title: "Aura Blaster",
-      description: "Charge massive glowing energy spheres in your fists and blast screen-spanning plasma beams from your palms.",
+      description: "Charge palm cores, fire screen-spanning god beams, or combine both fists into a merged ultimate cannon.",
       prompt: "Let me fire huge electric beams from my hands",
       gradient: "linear-gradient(135deg, #00ffaa, #00f0ff)"
     }

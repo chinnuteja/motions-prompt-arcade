@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { useHandTracking, HandSignals } from '../../hooks/useHandTracking';
+import Link from 'next/link';
+import { useHandTracking } from '../../hooks/useHandTracking';
 import { EffectConfig, EffectType, PALETTES, EFFECT_META, PaletteColors } from '../../lib/vfx-schema';
 import { VfxEffect } from '../../lib/effects/types';
 import styles from './EffectEngine.module.css';
@@ -10,12 +11,12 @@ import styles from './EffectEngine.module.css';
 const INSTRUCTION_DETAILS: Record<EffectType, { title: string; steps: string[]; gesture: string }> = {
   fire_magic: {
     title: "Fire Magic Controls",
-    gesture: "✊ Fist = Charge Vortex  ·  🖐️ Open = Shockwave / Jets",
+    gesture: "Fist = condense fire  ·  Open = directional eruption / stream",
     steps: [
-      "Keep hands relaxed to burn idle pilot flames along your palms.",
-      "Make a tight fist to pull surrounding fire into a swirling, high-density magnetic core.",
-      "Suddenly throw your hand open to release the charge as a massive explosive shockwave.",
-      "Keep your hand fully open to continuously blast either a wide flamethrower or fingertip jets."
+      "Hold a loose open hand to keep pilot flames alive along your palm and fingertips.",
+      "Make a tight fist to condense nearby fire into a dense palm core.",
+      "Throw your hand open to release a directional cone of flame that follows your palm angle.",
+      "Keep your hand fully open to sustain either a thick flamethrower stream or fingertip jets."
     ]
   },
   particle_nebula: {
@@ -39,12 +40,12 @@ const INSTRUCTION_DETAILS: Record<EffectType, { title: string; steps: string[]; 
   },
   aura_blaster: {
     title: "Aura Blaster Controls",
-    gesture: "✊ Fist = Charge Sphere  ·  🖐️ Open Palm = Fire Beam",
+    gesture: "Fist = charge  ·  Open = god beam  ·  Two fists then both open = merged ultimate",
     steps: [
-      "Make a tight fist to suck in ambient particles and charge up a massive energy sphere.",
-      "Depending on your configuration, the charge will either pull particles straight in or form a swirling gravity vortex.",
-      "Throw your hand open to unleash a massive, screen-spanning energy beam with a heavy recoil shake.",
-      "The beam's style (laser, plasma, or electric lightning) matches your prompt, and will fizzle out when your charge depletes!"
+      "Make a tight fist to collapse ambient energy into a bright palm core.",
+      "Depending on your configuration, the charge either implodes inward or spins into a gravity vortex.",
+      "Throw your hand open to fire a screen-spanning beam with recoil, sparks, and an impact bloom.",
+      "Charge both fists together, then open both hands to unleash a merged ultimate cannon."
     ]
   }
 };
@@ -98,11 +99,15 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
   const [session, setSession] = useState<SessionState>('prePermission');
   const [showGestureHint, setShowGestureHint] = useState(true);
   const [toastText, setToastText] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const [showDebug, setShowDebug] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('debug') === '1';
+  });
   const [showHelp, setShowHelp] = useState(false);
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -148,20 +153,21 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
   const meta = EFFECT_META[config.effect];
 
   // ── Hand tracking hook
+  const setVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    setVideoEl(node);
+  }, []);
+
+  const trackingEnabled = session === 'awaitingHands' || session === 'live' || session === 'idle';
   const { signalsRef, isReady } = useHandTracking(
-    session === 'awaitingHands' || session === 'live' || session === 'idle'
-      ? videoRef.current
-      : null,
-    session === 'awaitingHands' || session === 'live' || session === 'idle',
+    trackingEnabled ? videoEl : null,
+    trackingEnabled,
     CANVAS_WIDTH,
     CANVAS_HEIGHT,
   );
 
   // ── Debug toggle: 'd' key or ?debug=1
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('debug') === '1') setShowDebug(true);
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'd' || e.key === 'D') setShowDebug(prev => !prev);
     };
@@ -209,9 +215,9 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
 
   // ── Transition: initializing → awaitingHands once model is ready
   useEffect(() => {
-    if (session === 'initializing' && isReady) {
-      setSession('awaitingHands');
-    }
+    if (session !== 'initializing' || !isReady) return;
+    const id = window.setTimeout(() => setSession('awaitingHands'), 0);
+    return () => window.clearTimeout(id);
   }, [session, isReady]);
 
   // ── Performance overlay update at 4Hz (§6: direct textContent, not React state)
@@ -236,6 +242,24 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
   // ── Quality monitor at 1Hz (§4.5)
   useEffect(() => {
     if (session !== 'live' && session !== 'idle') return;
+
+    const showToast = (text: string, now: number) => {
+      const lastShown = toastCooldownRef.current[text] || 0;
+      if (now - lastShown < TOAST_COOLDOWN_MS) return;
+      toastCooldownRef.current[text] = now;
+      setToastText(text);
+      setTimeout(() => setToastText(null), 3000);
+    };
+
+    const checkToastCondition = (key: string, text: string, now: number) => {
+      const start = toastConditionStartRef.current[key];
+      if (!start) {
+        toastConditionStartRef.current[key] = now;
+      } else if (now - start >= TOAST_PERSIST_MS) {
+        showToast(text, now);
+        delete toastConditionStartRef.current[key];
+      }
+    };
 
     const interval = setInterval(() => {
       const signals = signalsRef.current;
@@ -282,25 +306,6 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
 
     return () => clearInterval(interval);
   }, [session, signalsRef]);
-
-  // Toast helpers (§4.5: one at a time, persist 2s, no repeat within 30s)
-  const showToast = useCallback((text: string, now: number) => {
-    const lastShown = toastCooldownRef.current[text] || 0;
-    if (now - lastShown < TOAST_COOLDOWN_MS) return;
-    toastCooldownRef.current[text] = now;
-    setToastText(text);
-    setTimeout(() => setToastText(null), 3000);
-  }, []);
-
-  const checkToastCondition = useCallback((key: string, text: string, now: number) => {
-    const start = toastConditionStartRef.current[key];
-    if (!start) {
-      toastConditionStartRef.current[key] = now;
-    } else if (now - start >= TOAST_PERSIST_MS) {
-      showToast(text, now);
-      delete toastConditionStartRef.current[key];
-    }
-  }, [showToast]);
 
   // ── The main rAF loop (§3 + §6)
   useEffect(() => {
@@ -439,7 +444,6 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, effect, signalsRef]);
 
   // ── Cleanup camera stream on unmount
@@ -457,7 +461,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
     <div className={styles.container}>
       {/* Hidden video element */}
       <video
-        ref={videoRef}
+        ref={setVideoNode}
         className={styles.videoHidden}
         playsInline
         muted
@@ -540,9 +544,9 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
           <p className={styles.errorBody}>
             This experience needs a camera to work. Try opening it on a device with a webcam.
           </p>
-          <a href="/" className={styles.retryButton} style={{ textDecoration: 'none' }}>
+          <Link href="/" className={styles.retryButton} style={{ textDecoration: 'none' }}>
             Go home
-          </a>
+          </Link>
         </div>
       )}
 
@@ -631,7 +635,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
               {INSTRUCTION_DETAILS[config.effect].title}
             </h2>
             <div className={styles.helpPrompt}>
-              Current Prompt: <span style={{ color: '#fff' }}>"{config.prompt}"</span>
+              Current Prompt: <span style={{ color: '#fff' }}>&quot;{config.prompt}&quot;</span>
             </div>
             
             <div className={styles.instructionBox} style={{ background: 'rgba(255,255,255,0.01)' }}>

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { AzureOpenAI } from 'openai';
-import { EffectConfig, validateEffectConfig, DEFAULT_EFFECT_CONFIG } from '../../../lib/vfx-schema';
+import { validateEffectConfig, DEFAULT_EFFECT_CONFIG } from '../../../lib/vfx-schema';
 
 const client = new AzureOpenAI({
   apiKey: process.env.AZURE_OPENAI_API_KEY || '',
@@ -24,13 +24,13 @@ export async function POST(req: Request) {
 Your job is to take a user's plain-English description of a visual effect and map it EXACTLY to a JSON EffectConfig object.
 
 You have access to these specific Effects:
-- 'aura_blaster': Charge massive glowing energy spheres in your fists, open hands to blast plasma beams.
+- 'aura_blaster': Charge massive glowing energy in your fists, open hands to blast plasma beams, or charge both fists then open both hands for a merged ultimate cannon.
   -> params: beamStyle ("laser"|"plasma"|"electric"), chargeEffect ("implosion"|"vortex")
 - 'particle_nebula': Particles orbit your palm, explode when you open your hand.
   -> params: motion ("orbit"|"stream"|"swarm"), openHandAction ("explode"|"release"), trail ("short"|"long")
-- 'glitch_tiles': Glass cards that form geometric shapes based on gestures. Open hands for circle swirl, index fingers for lines, fists for squares.
+- 'glitch_tiles': Glass cards that form geometric shapes based on gestures. Open hands for circle swirl, index fingers for lines, fists for card shields.
   -> params: tileShape ("square"|"wide"|"shard"), pullMode ("attract"|"repel"|"vortex"|"fan"), snapBack ("spring"|"drift")
-- 'fire_magic': Real fluid fire on your hands. Fist condenses and charges it, open hand erupts.
+- 'fire_magic': Real fluid fire on your hands. Fist condenses it into a palm core, open hand releases directional flame cones, flamethrowers, or fingertip jets.
   -> params: eruption ("burst"|"flamethrower"), form ("wildfire"|"plasma"), trails ("smoky"|"clean")
 
 You have access to these Palettes:
@@ -121,7 +121,7 @@ User: "Give me a huge flamethrower"
     
     try {
       parsed = JSON.parse(responseText);
-    } catch (e) {
+    } catch {
       console.error("Failed to parse LLM JSON:", responseText);
       return NextResponse.json({ config: DEFAULT_EFFECT_CONFIG });
     }

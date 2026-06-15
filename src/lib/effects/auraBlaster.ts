@@ -1,47 +1,76 @@
 import { VfxEffect } from './types';
 import { HandSignals } from '../../hooks/useHandTracking';
 import { EffectConfig, AuraBlasterConfig, PALETTES } from '../vfx-schema';
-import { expDamp, PingPongCanvas, makeGlowSprite } from './fxUtils';
+import { expDamp, PingPongCanvas, makeGlowSprite, clamp } from './fxUtils';
 
-const PARTICLE_COUNTS = [240, 400, 560];   // per intensity tier
-const BOLT_SEGMENTS = 14;                    // electric-style polyline node count
+const PARTICLE_COUNTS = [260, 440, 620];
+const BOLT_SEGMENTS = 16;
+const ULTIMATE_ARM_SECONDS = 0.35;
+const ULTIMATE_DURATION = 1.2;
+const MAX_PARTICLE_SPEED = 2800;
+
+interface HandBasis {
+  palmX: number;
+  palmY: number;
+  forwardX: number;
+  forwardY: number;
+  sideX: number;
+  sideY: number;
+  scale: number;
+}
 
 export class AuraBlasterEffect implements VfxEffect {
-  readonly effectIncludesVideo = false;
+  readonly effectIncludesVideo = true;
 
   private config!: AuraBlasterConfig;
   private ppc!: PingPongCanvas;
   private w = 0;
   private h = 0;
 
-  // State
+  // Per-hand state.
   private charge = [0, 0];
   private firing = [false, false];
-  private wasFiring = [false, false];          // for false→true onset detection
-  private muzzle = [0, 0];                      // fire-onset flash, decays per hand
-  private beamProgress = [0, 0];                // 0→1 eased beam extension on fire
-  private shake = 0;                            // one-shot decaying shake impulse
-  private intensityMul = 1;                     // beam/shake scale from intensity tier
+  private wasFiring = [false, false];
+  private muzzle = [0, 0];
+  private beamProgress = [0, 0];
+  private recoil = [0, 0];
+  private emitterCarry = [0, 0];
+
+  // Two-hand ultimate state.
+  private ultimateCharge = 0;
+  private ultimateArmed = false;
+  private dualFistTime = 0;
+  private ultimateFiring = false;
+  private ultimateProgress = 0;
+  private ultimateTime = 0;
+  private ultimateMuzzle = 0;
+  private ultimateBasis: HandBasis | null = null;
+  private ultimateCarry = 0;
+
+  private shake = 0;
+  private intensityMul = 1;
   private lastDt = 1 / 60;
 
-  // Particles (for charge suck-in and beam trailing)
+  // Particles: 0 = ambient/suck, 1 = beam spark.
   private cap = 400;
   private px!: Float32Array;
   private py!: Float32Array;
   private pvx!: Float32Array;
   private pvy!: Float32Array;
   private life!: Float32Array;
-  private pType!: Uint8Array; // 0 = ambient/suck, 1 = blast spark
+  private pType!: Uint8Array;
+  private particleCursor = 0;
 
-  // Electric bolt node offsets (regenerated on a timer, never per-frame allocated)
   private boltOffset = new Float32Array(BOLT_SEGMENTS);
   private boltTimer = 0;
 
   private spriteCore!: HTMLCanvasElement;
   private spriteGlow!: HTMLCanvasElement;
   private spriteParticle!: HTMLCanvasElement;
-  private beamStrip!: HTMLCanvasElement;        // pre-rendered beam cross-section gradient
+  private beamStrip!: HTMLCanvasElement;
   private bgTreatment = 'rgba(0,0,0,0)';
+
+  private lastHands: [HandSignals | null, HandSignals | null] = [null, null];
 
   init(config: EffectConfig, canvasWidth: number, canvasHeight: number): void {
     if (config.effect !== 'aura_blaster') throw new Error('Wrong config type');
@@ -49,20 +78,17 @@ export class AuraBlasterEffect implements VfxEffect {
     this.w = canvasWidth;
     this.h = canvasHeight;
 
-    // Ping pong canvas for glow feedback
     this.ppc = new PingPongCanvas(Math.floor(canvasWidth / 2), Math.floor(canvasHeight / 2));
 
     const palette = PALETTES[config.palette];
     this.bgTreatment = palette.bgTreatment || 'rgba(0,0,0,0.6)';
-
-    this.spriteCore = makeGlowSprite(60, '#ffffff', palette.primary);
-    this.spriteGlow = makeGlowSprite(120, palette.primary, 'rgba(0,0,0,0)');
-    this.spriteParticle = makeGlowSprite(8, palette.primary, 'rgba(0,0,0,0)');
+    this.spriteCore = makeGlowSprite(72, '#ffffff', palette.primary);
+    this.spriteGlow = makeGlowSprite(150, palette.primary, 'rgba(0,0,0,0)');
+    this.spriteParticle = makeGlowSprite(10, palette.primary, 'rgba(0,0,0,0)');
     this.beamStrip = this.makeBeamStrip(palette.primary);
 
-    // Intensity drives particle density and the beam/shake scale.
-    this.intensityMul = [0.85, 1.0, 1.15][config.intensity - 1] ?? 1.0;
-    this.cap = PARTICLE_COUNTS[config.intensity - 1] ?? 400;
+    this.intensityMul = [0.9, 1.05, 1.22][config.intensity - 1] ?? 1.05;
+    this.cap = PARTICLE_COUNTS[config.intensity - 1] ?? 440;
 
     this.px = new Float32Array(this.cap);
     this.py = new Float32Array(this.cap);
@@ -78,196 +104,387 @@ export class AuraBlasterEffect implements VfxEffect {
     }
   }
 
-  /** Vertical cross-section of the beam (transparent → palette → white → palette → transparent). */
   private makeBeamStrip(primary: string): HTMLCanvasElement {
     const c = document.createElement('canvas');
     c.width = 1;
-    c.height = 64;
+    c.height = 96;
     const ctx = c.getContext('2d')!;
-    const grad = ctx.createLinearGradient(0, 0, 0, 64);
+    const grad = ctx.createLinearGradient(0, 0, 0, 96);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(0.3, primary);
+    grad.addColorStop(0.18, primary);
+    grad.addColorStop(0.42, '#ffffff');
     grad.addColorStop(0.5, '#ffffff');
-    grad.addColorStop(0.7, primary);
+    grad.addColorStop(0.58, '#ffffff');
+    grad.addColorStop(0.82, primary);
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 1, 64);
+    ctx.fillRect(0, 0, 1, 96);
     return c;
   }
 
-  private resetParticle(i: number, isBlast = false, originX = 0, originY = 0, dirX = 0, dirY = 0, speed = 0) {
+  private resetParticle(
+    i: number,
+    isBlast = false,
+    originX = 0,
+    originY = 0,
+    dirX = 0,
+    dirY = 0,
+    speed = 0,
+  ): void {
     if (isBlast) {
       this.px[i] = originX;
       this.py[i] = originY;
-      this.pvx[i] = dirX * speed + (Math.random() - 0.5) * speed * 0.2;
-      this.pvy[i] = dirY * speed + (Math.random() - 0.5) * speed * 0.2;
-      this.life[i] = 0.5 + Math.random() * 0.5;
+      this.pvx[i] = dirX * speed + (Math.random() - 0.5) * speed * 0.22;
+      this.pvy[i] = dirY * speed + (Math.random() - 0.5) * speed * 0.22;
+      this.life[i] = 0.45 + Math.random() * 0.65;
       this.pType[i] = 1;
-    } else {
-      this.px[i] = Math.random() * this.w;
-      this.py[i] = Math.random() * this.h;
-      this.pvx[i] = (Math.random() - 0.5) * 50;
-      this.pvy[i] = (Math.random() - 0.5) * 50;
-      this.life[i] = Math.random();
-      this.pType[i] = 0;
+      return;
     }
+
+    this.px[i] = Math.random() * this.w;
+    this.py[i] = Math.random() * this.h;
+    this.pvx[i] = (Math.random() - 0.5) * 55;
+    this.pvy[i] = (Math.random() - 0.5) * 55;
+    this.life[i] = 0.4 + Math.random() * 1.2;
+    this.pType[i] = 0;
   }
 
-  // Need to store hands to draw them since step() is separated from draw()
-  private lastHands: [HandSignals | null, HandSignals | null] = [null, null];
-  
   step(
     hands: [HandSignals | null, HandSignals | null],
     dt: number,
     ramp: number,
-    _video: HTMLVideoElement
+    _video: HTMLVideoElement,
   ): void {
     void _video;
     this.lastHands = hands;
     this.lastDt = dt;
-    const isVortex = this.config.params.chargeEffect === 'vortex';
 
-    // 1. Process Hands
+    const bases: [HandBasis | null, HandBasis | null] = [
+      hands[0] && hands[0].track !== 'lost' ? this.getHandBasis(hands[0]) : null,
+      hands[1] && hands[1].track !== 'lost' ? this.getHandBasis(hands[1]) : null,
+    ];
+
+    const bothTracked = !!bases[0] && !!bases[1];
+    const bothFists = bothTracked && hands[0]!.openness < 0.35 && hands[1]!.openness < 0.35;
+    const bothOpen = bothTracked && hands[0]!.openness > 0.7 && hands[1]!.openness > 0.7;
+
+    this.stepUltimateState(bases, bothTracked, bothFists, bothOpen, dt, ramp);
+    this.stepHands(hands, bases, dt, ramp);
+    this.stepBoltJitter(dt);
+    this.stepParticles(hands, bases, dt, ramp);
+  }
+
+  private stepUltimateState(
+    bases: [HandBasis | null, HandBasis | null],
+    bothTracked: boolean,
+    bothFists: boolean,
+    bothOpen: boolean,
+    dt: number,
+    ramp: number,
+  ): void {
+    if (this.ultimateFiring) {
+      if (bases[0] && bases[1]) this.ultimateBasis = this.getMergedBasis(bases[0], bases[1]);
+      this.ultimateProgress = Math.min(1, this.ultimateProgress + dt * 4.8);
+      this.ultimateTime -= dt;
+      this.ultimateMuzzle = Math.max(0, this.ultimateMuzzle - dt * 3.6);
+      this.ultimateCharge = Math.max(0, this.ultimateCharge - dt / ULTIMATE_DURATION);
+      this.shake = Math.max(this.shake, 5.5 * this.intensityMul * ramp);
+
+      if (this.ultimateBasis) {
+        this.emitUltimateSparks(this.ultimateBasis, dt, ramp);
+      }
+
+      if (this.ultimateTime <= 0) {
+        this.ultimateFiring = false;
+        this.ultimateProgress = 0;
+        this.ultimateArmed = false;
+        this.ultimateCharge = 0;
+        this.ultimateBasis = null;
+        this.ultimateCarry = 0;
+      }
+      return;
+    }
+
+    if (!bothTracked) {
+      this.dualFistTime = 0;
+      this.ultimateArmed = false;
+      this.ultimateCharge = Math.max(0, this.ultimateCharge - dt * 1.8);
+      return;
+    }
+
+    if (bothFists) {
+      this.dualFistTime += dt;
+      this.ultimateCharge = Math.min(1, this.ultimateCharge + dt * 0.9);
+      if (this.dualFistTime >= ULTIMATE_ARM_SECONDS && this.ultimateCharge > 0.25) {
+        this.ultimateArmed = true;
+      }
+    } else if (!this.ultimateArmed) {
+      this.dualFistTime = Math.max(0, this.dualFistTime - dt * 2);
+      this.ultimateCharge = Math.max(0, this.ultimateCharge - dt * 0.75);
+    }
+
+    if (this.ultimateArmed && bothOpen && bases[0] && bases[1]) {
+      this.ultimateFiring = true;
+      this.ultimateProgress = 0;
+      this.ultimateTime = ULTIMATE_DURATION * (0.85 + this.ultimateCharge * 0.3);
+      this.ultimateMuzzle = 1;
+      this.ultimateBasis = this.getMergedBasis(bases[0], bases[1]);
+      this.shake = Math.max(this.shake, 28 * this.intensityMul * ramp);
+      for (let hi = 0; hi < 2; hi++) {
+        this.firing[hi] = false;
+        this.wasFiring[hi] = false;
+        this.beamProgress[hi] = 0;
+        this.recoil[hi] = 0;
+      }
+    }
+  }
+
+  private stepHands(
+    hands: [HandSignals | null, HandSignals | null],
+    bases: [HandBasis | null, HandBasis | null],
+    dt: number,
+    ramp: number,
+  ): void {
     for (let hi = 0; hi < 2; hi++) {
       const hand = hands[hi];
-      if (!hand || hand.track === 'lost') {
-        this.charge[hi] = Math.max(0, this.charge[hi] - dt);
+      const basis = bases[hi];
+
+      if (!hand || !basis || hand.track === 'lost') {
+        this.charge[hi] = Math.max(0, this.charge[hi] - dt * 1.4);
         this.firing[hi] = false;
+        this.emitterCarry[hi] = 0;
+      } else if (this.ultimateFiring) {
+        this.firing[hi] = false;
+        this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.45);
       } else {
         const isFist = hand.openness < 0.35;
         const isOpen = hand.openness > 0.7;
 
         if (isFist) {
-          // Charging!
-          this.charge[hi] = Math.min(1.5, this.charge[hi] + dt * 0.8);
+          this.charge[hi] = Math.min(1.5, this.charge[hi] + dt * 0.95);
           this.firing[hi] = false;
         } else if (isOpen && this.charge[hi] > 0.1) {
-          // Firing!
           this.firing[hi] = true;
-          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.4); // Drains over ~3 seconds
+          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.34);
+          this.emitBeamSparks(basis, hi, dt, ramp);
         } else {
-          // Idle
           this.firing[hi] = false;
-          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.5);
+          this.charge[hi] = Math.max(0, this.charge[hi] - dt * 0.55);
         }
       }
 
-      // Fire onset: a single muzzle flash + shake kick, and the beam extends from 0.
       if (this.firing[hi] && !this.wasFiring[hi]) {
         this.muzzle[hi] = 1;
+        this.recoil[hi] = 1;
         this.beamProgress[hi] = 0;
-        this.shake = Math.max(this.shake, 10 * this.intensityMul * ramp);
+        this.shake = Math.max(this.shake, 14 * this.intensityMul * ramp);
       }
-      this.muzzle[hi] = Math.max(0, this.muzzle[hi] - dt * 5);
+
+      this.muzzle[hi] = Math.max(0, this.muzzle[hi] - dt * 5.4);
+      this.recoil[hi] = Math.max(0, this.recoil[hi] - dt * 3.8);
       this.beamProgress[hi] = this.firing[hi]
-        ? Math.min(1, this.beamProgress[hi] + dt * 10)   // ~100ms ease-in to full length
-        : 0;
+        ? Math.min(1, this.beamProgress[hi] + dt * 8.5)
+        : Math.max(0, this.beamProgress[hi] - dt * 12);
       this.wasFiring[hi] = this.firing[hi];
     }
 
-    // Shake decays toward zero; a small sustained rumble is added in draw() while firing.
     this.shake *= expDamp(8, dt);
+  }
 
-    // Electric bolt jitter regenerates on a timer, not every frame.
+  private stepBoltJitter(dt: number): void {
     this.boltTimer -= dt;
-    if (this.boltTimer <= 0) {
-      this.boltTimer = 0.04;
-      for (let s = 0; s < BOLT_SEGMENTS; s++) {
-        // Taper offsets toward the ends so the bolt anchors at palm and tip.
-        const taper = Math.sin((s / (BOLT_SEGMENTS - 1)) * Math.PI);
-        this.boltOffset[s] = (Math.random() - 0.5) * taper;
-      }
-    }
+    if (this.boltTimer > 0) return;
 
-    // 2. Process Particles
-    const damp = expDamp(2.0, dt);
+    this.boltTimer = 0.035;
+    for (let s = 0; s < BOLT_SEGMENTS; s++) {
+      const taper = Math.sin((s / (BOLT_SEGMENTS - 1)) * Math.PI);
+      this.boltOffset[s] = (Math.random() - 0.5) * taper;
+    }
+  }
+
+  private stepParticles(
+    hands: [HandSignals | null, HandSignals | null],
+    bases: [HandBasis | null, HandBasis | null],
+    dt: number,
+    ramp: number,
+  ): void {
+    const isVortex = this.config.params.chargeEffect === 'vortex';
+    const ambientDamp = expDamp(1.7, dt);
+    const sparkDamp = expDamp(0.95, dt);
+
     for (let i = 0; i < this.cap; i++) {
       this.life[i] -= dt;
       if (this.life[i] <= 0) {
-        // Find if we should spawn a blast particle
-        let spawned = false;
-        for (let hi = 0; hi < 2; hi++) {
-          if (this.firing[hi] && Math.random() < 0.2 * ramp) {
-            const hand = hands[hi]!;
-            const basis = this.getHandBasis(hand);
-            this.resetParticle(i, true, basis.palmX, basis.palmY, basis.forwardX, basis.forwardY, 1500 + Math.random() * 1000);
-            spawned = true;
-            break;
-          }
-        }
-        if (!spawned) {
-          this.resetParticle(i, false);
-        }
+        this.resetParticle(i);
         continue;
       }
 
       if (this.pType[i] === 0) {
-        // Ambient particle: gets sucked into charging hands
         let affected = false;
+
+        if (this.ultimateFiring && this.ultimateBasis) {
+          affected = this.affectParticleByBeam(i, this.ultimateBasis, 1.4, 220, dt);
+        }
+
         for (let hi = 0; hi < 2; hi++) {
           const hand = hands[hi];
-          if (!hand) continue;
+          const basis = bases[hi];
+          if (!hand || !basis) continue;
 
-          if (this.firing[hi]) {
-            // Beam violently blows particles away and supercharges them!
-            const basis = this.getHandBasis(hand);
-            const dx = this.px[i] - basis.palmX;
-            const dy = this.py[i] - basis.palmY;
-            
-            // If particle is in front of the hand
-            const dotForward = dx * basis.forwardX + dy * basis.forwardY;
-            if (dotForward > -100) {
-              const dist = Math.hypot(dx, dy) || 1;
-              const push = (150000 / (dist + 50)) * this.charge[hi];
-              
-              // Push strongly forward, and slightly outward from the beam core
-              this.pvx[i] += basis.forwardX * push * dt + (dx / dist) * push * 0.3 * dt;
-              this.pvy[i] += basis.forwardY * push * dt + (dy / dist) * push * 0.3 * dt;
-              
-              // Supercharge the particle
-              this.life[i] = Math.max(this.life[i], 0.8);
-              this.pType[i] = 1; // Convert to blast spark
-              affected = true;
-            }
-          } else if (this.charge[hi] > 0) {
-            // Ambient suck-in during charge
-            const dx = hand.palm.x - this.px[i];
-            const dy = hand.palm.y - this.py[i];
-            const dist = Math.hypot(dx, dy) || 1;
-            if (dist < 400) {
-              const pull = (4000 / dist) * this.charge[hi] * ramp;
-              this.pvx[i] += (dx / dist) * pull * dt;
-              this.pvy[i] += (dy / dist) * pull * dt;
-              // Vortex: tangential swirl so particles visibly orbit before collapsing in.
-              if (isVortex) {
-                const swirl = (2600 / dist) * this.charge[hi] * ramp;
-                this.pvx[i] += (-dy / dist) * swirl * dt;
-                this.pvy[i] += (dx / dist) * swirl * dt;
-              }
-              affected = true;
-            }
-            if (dist < 30) {
-              this.life[i] = 0; // Consume into the sphere
-            }
+          if (!affected && this.firing[hi]) {
+            affected = this.affectParticleByBeam(i, basis, this.charge[hi], 110, dt);
+          } else if (!affected && this.charge[hi] > 0.02) {
+            affected = this.affectParticleByCharge(i, basis, this.charge[hi], isVortex, dt, ramp);
           }
         }
+
         if (!affected) {
-          // Slow drift
-          this.pvx[i] += (Math.random() - 0.5) * 100 * dt;
-          this.pvy[i] += (Math.random() - 0.5) * 100 * dt;
+          this.pvx[i] += (Math.random() - 0.5) * 80 * dt;
+          this.pvy[i] += (Math.random() - 0.5) * 80 * dt;
         }
       }
 
+      const damp = this.pType[i] === 0 ? ambientDamp : sparkDamp;
       this.pvx[i] *= damp;
       this.pvy[i] *= damp;
+      this.clampParticleVelocity(i);
       this.px[i] += this.pvx[i] * dt;
       this.py[i] += this.pvy[i] * dt;
+
+      if (this.px[i] < -160 || this.px[i] > this.w + 160 || this.py[i] < -160 || this.py[i] > this.h + 160) {
+        this.resetParticle(i);
+      }
     }
   }
 
-  private getHandBasis(hand: HandSignals) {
+  private affectParticleByCharge(
+    i: number,
+    basis: HandBasis,
+    charge: number,
+    isVortex: boolean,
+    dt: number,
+    ramp: number,
+  ): boolean {
+    const dx = basis.palmX - this.px[i];
+    const dy = basis.palmY - this.py[i];
+    const dist = Math.hypot(dx, dy) || 1;
+    const radius = 290 + charge * 95;
+    if (dist > radius) return false;
+
+    const n = 1 - dist / radius;
+    const pull = (5200 / Math.max(28, dist)) * charge * (0.45 + n) * ramp;
+    this.pvx[i] += (dx / dist) * pull * dt;
+    this.pvy[i] += (dy / dist) * pull * dt;
+
+    if (isVortex) {
+      const swirl = (3600 / Math.max(35, dist)) * charge * (0.45 + n) * ramp;
+      this.pvx[i] += (-dy / dist) * swirl * dt;
+      this.pvy[i] += (dx / dist) * swirl * dt;
+    }
+
+    if (dist < 26 + charge * 8) this.life[i] = 0;
+    return true;
+  }
+
+  private affectParticleByBeam(
+    i: number,
+    basis: HandBasis,
+    power: number,
+    corridorBase: number,
+    dt: number,
+  ): boolean {
+    const dx = this.px[i] - basis.palmX;
+    const dy = this.py[i] - basis.palmY;
+    const axial = dx * basis.forwardX + dy * basis.forwardY;
+    const lateral = dx * basis.sideX + dy * basis.sideY;
+    const corridor = corridorBase + power * 70;
+    if (axial < -basis.scale * 0.7 || Math.abs(lateral) > corridor) return false;
+
+    const center = 1 - Math.abs(lateral) / corridor;
+    const push = (1200 + power * 1050) * center;
+    this.pvx[i] += (basis.forwardX * push + basis.sideX * lateral * 2.2) * dt;
+    this.pvy[i] += (basis.forwardY * push + basis.sideY * lateral * 2.2) * dt;
+    this.life[i] = Math.max(this.life[i], 0.75);
+    this.pType[i] = 1;
+    return true;
+  }
+
+  private emitBeamSparks(basis: HandBasis, handIndex: number, dt: number, ramp: number): void {
+    if (ramp <= 0.02) return;
+
+    const rate = (90 + this.charge[handIndex] * 70) * this.intensityMul * ramp;
+    this.emitterCarry[handIndex] += rate * dt;
+    const count = Math.min(8, Math.floor(this.emitterCarry[handIndex]));
+    this.emitterCarry[handIndex] -= count;
+
+    for (let i = 0; i < count; i++) {
+      const side = (Math.random() - 0.5) * basis.scale * 0.8;
+      const forward = basis.scale * (0.1 + Math.random() * 0.35);
+      const speed = 1100 + Math.random() * 1200 + this.charge[handIndex] * 500;
+      this.spawnSpark(
+        basis.palmX + basis.forwardX * forward + basis.sideX * side,
+        basis.palmY + basis.forwardY * forward + basis.sideY * side,
+        basis.forwardX + basis.sideX * (Math.random() - 0.5) * 0.38,
+        basis.forwardY + basis.sideY * (Math.random() - 0.5) * 0.38,
+        speed,
+      );
+    }
+  }
+
+  private emitUltimateSparks(basis: HandBasis, dt: number, ramp: number): void {
+    if (ramp <= 0.02) return;
+
+    this.ultimateCarry += 210 * this.intensityMul * ramp * dt;
+    const count = Math.min(14, Math.floor(this.ultimateCarry));
+    this.ultimateCarry -= count;
+
+    for (let i = 0; i < count; i++) {
+      const side = (Math.random() - 0.5) * basis.scale * 2.2;
+      const forward = basis.scale * (0.05 + Math.random() * 0.7);
+      const speed = 1800 + Math.random() * 1300;
+      this.spawnSpark(
+        basis.palmX + basis.forwardX * forward + basis.sideX * side,
+        basis.palmY + basis.forwardY * forward + basis.sideY * side,
+        basis.forwardX + basis.sideX * (Math.random() - 0.5) * 0.45,
+        basis.forwardY + basis.sideY * (Math.random() - 0.5) * 0.45,
+        speed,
+      );
+    }
+  }
+
+  private nextParticleSlot(): number {
+    for (let n = 0; n < this.cap; n++) {
+      const idx = (this.particleCursor + n) % this.cap;
+      if (this.life[idx] <= 0 || this.pType[idx] === 0) {
+        this.particleCursor = (idx + 1) % this.cap;
+        return idx;
+      }
+    }
+
+    const idx = this.particleCursor;
+    this.particleCursor = (this.particleCursor + 1) % this.cap;
+    return idx;
+  }
+
+  private spawnSpark(x: number, y: number, dirX: number, dirY: number, speed: number): void {
+    const len = Math.hypot(dirX, dirY) || 1;
+    const idx = this.nextParticleSlot();
+    this.resetParticle(idx, true, x, y, dirX / len, dirY / len, speed);
+  }
+
+  private clampParticleVelocity(i: number): void {
+    const speed = Math.hypot(this.pvx[i], this.pvy[i]);
+    if (speed <= MAX_PARTICLE_SPEED) return;
+    const m = MAX_PARTICLE_SPEED / speed;
+    this.pvx[i] *= m;
+    this.pvy[i] *= m;
+  }
+
+  private getHandBasis(hand: HandSignals): HandBasis {
     const wrist = hand.landmarks[0] || hand.palm;
+    const indexMcp = hand.landmarks[5] || hand.palm;
     const middleMcp = hand.landmarks[9] || hand.palm;
+    const pinkyMcp = hand.landmarks[17] || hand.palm;
 
     let forwardX = middleMcp.x - wrist.x;
     let forwardY = middleMcp.y - wrist.y;
@@ -275,244 +492,469 @@ export class AuraBlasterEffect implements VfxEffect {
     forwardX /= fLen;
     forwardY /= fLen;
 
+    let sideX = pinkyMcp.x - indexMcp.x;
+    let sideY = pinkyMcp.y - indexMcp.y;
+    const sLen = Math.hypot(sideX, sideY) || 1;
+    sideX /= sLen;
+    sideY /= sLen;
+
     return {
       palmX: hand.palm.x,
       palmY: hand.palm.y,
       forwardX,
       forwardY,
+      sideX,
+      sideY,
       scale: Math.max(32, hand.scale),
+    };
+  }
+
+  private getMergedBasis(a: HandBasis, b: HandBasis): HandBasis {
+    let forwardX = a.forwardX + b.forwardX;
+    let forwardY = a.forwardY + b.forwardY;
+    let fLen = Math.hypot(forwardX, forwardY);
+    if (fLen < 0.2) {
+      forwardX = 0;
+      forwardY = -1;
+      fLen = 1;
+    }
+    forwardX /= fLen;
+    forwardY /= fLen;
+
+    let sideX = -forwardY;
+    let sideY = forwardX;
+    const handDx = b.palmX - a.palmX;
+    const handDy = b.palmY - a.palmY;
+    if (Math.hypot(handDx, handDy) > 10) {
+      const hLen = Math.hypot(handDx, handDy);
+      sideX = handDx / hLen;
+      sideY = handDy / hLen;
+    }
+
+    return {
+      palmX: (a.palmX + b.palmX) * 0.5,
+      palmY: (a.palmY + b.palmY) * 0.5,
+      forwardX,
+      forwardY,
+      sideX,
+      sideY,
+      scale: Math.max(64, (a.scale + b.scale) * 0.7),
     };
   }
 
   draw(ctx: CanvasRenderingContext2D, video: HTMLVideoElement): void {
     const t = performance.now() * 0.001;
+    const palette = PALETTES[this.config.palette];
+    const isImplosion = this.config.params.chargeEffect === 'implosion';
 
-    // Screen shake: a decaying fire-onset impulse, plus restrained context rumble.
-    // Charging stays calm until nearly full (anticipation, not constant noise).
-    let maxCharge = 0;
-    let isAnyFiring = false;
+    let maxCharge = this.ultimateCharge;
+    let isAnyFiring = this.ultimateFiring;
     for (let hi = 0; hi < 2; hi++) {
-      if (this.charge[hi] > maxCharge) maxCharge = this.charge[hi];
-      if (this.firing[hi]) isAnyFiring = true;
+      maxCharge = Math.max(maxCharge, this.charge[hi]);
+      isAnyFiring = isAnyFiring || this.firing[hi];
     }
 
-    let shakeMag = this.shake;                         // one-shot impulse (decays in step)
-    if (isAnyFiring) shakeMag += 3 * this.intensityMul; // subtle sustained rumble
-    else if (maxCharge > 0.9) shakeMag += 2;            // tiny "ready" tremble near full
+    let shakeMag = this.shake;
+    if (this.ultimateFiring) shakeMag += 8 * this.intensityMul;
+    else if (isAnyFiring) shakeMag += 4.2 * this.intensityMul;
+    else if (maxCharge > 0.9) shakeMag += 2.4;
+    shakeMag = clamp(shakeMag, 0, 32);
     const shakeX = shakeMag > 0.1 ? (Math.random() - 0.5) * shakeMag : 0;
     const shakeY = shakeMag > 0.1 ? (Math.random() - 0.5) * shakeMag : 0;
 
     ctx.save();
-    
-    // Draw Video Background with optional shake
     ctx.translate(shakeX, shakeY);
-    
+
     ctx.save();
     ctx.scale(-1, 1);
     ctx.translate(-this.w, 0);
     ctx.drawImage(video, 0, 0, this.w, this.h);
     ctx.restore();
 
-    // Darken background to make the beam pop
     ctx.fillStyle = this.bgTreatment;
     ctx.fillRect(0, 0, this.w, this.h);
 
-    // Update Ping Pong Canvas for Aura/Trails
+    this.drawFeedbackField(ctx, isImplosion);
+
+    ctx.globalCompositeOperation = 'screen';
+    for (let hi = 0; hi < 2; hi++) {
+      const hand = this.lastHands[hi];
+      if (!hand || hand.track === 'lost') continue;
+      const basis = this.getHandBasis(hand);
+      this.drawChargeAura(ctx, basis, this.charge[hi], hi, isImplosion, palette.primary, t);
+    }
+
+    if (this.ultimateFiring && this.ultimateBasis) {
+      this.drawUltimate(ctx, palette.primary, t);
+    } else {
+      for (let hi = 0; hi < 2; hi++) {
+        const hand = this.lastHands[hi];
+        if (!hand || hand.track === 'lost') continue;
+        const basis = this.getHandBasis(hand);
+        if (this.muzzle[hi] > 0.01) this.drawMuzzle(ctx, basis, this.charge[hi], this.muzzle[hi]);
+        if (this.firing[hi]) this.drawNormalBeam(ctx, basis, hi, t);
+      }
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+
+  private drawFeedbackField(ctx: CanvasRenderingContext2D, isImplosion: boolean): void {
     const pw = this.ppc.width;
     const ph = this.ppc.height;
     const writeCtx = this.ppc.writeCtx;
+    const hw = pw / this.w;
+    const hh = ph / this.h;
 
     writeCtx.clearRect(0, 0, pw, ph);
     writeCtx.save();
     writeCtx.translate(pw / 2, ph / 2);
-    // Slight outward expansion for aura trails
-    writeCtx.scale(1.01, 1.01);
+    writeCtx.scale(1.012, 1.012);
     writeCtx.translate(-pw / 2, -ph / 2);
-    // Frame-rate-independent persistence (was a hardcoded 0.85 per frame).
-    writeCtx.globalAlpha = expDamp(9.7, this.lastDt);
+    writeCtx.globalAlpha = expDamp(8.8, this.lastDt);
     writeCtx.globalCompositeOperation = 'source-over';
     writeCtx.drawImage(this.ppc.read, 0, 0);
     writeCtx.restore();
 
     writeCtx.globalCompositeOperation = 'lighter';
-    const hw = pw / this.w;
-    const hh = ph / this.h;
-
-    // Draw particles into ping-pong via a pre-rendered soft sprite (no per-particle path ops).
-    // implosion → inward-collapsing streaks aligned to velocity; otherwise soft dots.
-    const isImplosion = this.config.params.chargeEffect === 'implosion';
     for (let i = 0; i < this.cap; i++) {
       if (this.life[i] <= 0) continue;
       const x = this.px[i] * hw;
       const y = this.py[i] * hh;
       const blast = this.pType[i] === 1;
-      const s = blast ? 7 : 4;
-      writeCtx.globalAlpha = Math.min(1, this.life[i] * 2);
+      const s = blast ? 9 : 4.8;
+      const alpha = Math.min(1, this.life[i] * (blast ? 2.0 : 1.35));
+
       if (isImplosion && !blast) {
-        // Streak from the particle back along its velocity to read as collapsing inward.
-        const tailX = (this.px[i] - this.pvx[i] * 0.03) * hw;
-        const tailY = (this.py[i] - this.pvy[i] * 0.03) * hh;
-        const steps = 3;
-        for (let k = 0; k <= steps; k++) {
-          const f = k / steps;
-          writeCtx.globalAlpha = Math.min(1, this.life[i] * 2) * (0.3 + 0.7 * f);
-          writeCtx.drawImage(this.spriteParticle, x + (tailX - x) * (1 - f) - s / 2, y + (tailY - y) * (1 - f) - s / 2, s, s);
+        const tailX = (this.px[i] - this.pvx[i] * 0.04) * hw;
+        const tailY = (this.py[i] - this.pvy[i] * 0.04) * hh;
+        for (let k = 0; k <= 3; k++) {
+          const f = k / 3;
+          writeCtx.globalAlpha = alpha * (0.22 + 0.78 * f);
+          writeCtx.drawImage(
+            this.spriteParticle,
+            x + (tailX - x) * (1 - f) - s / 2,
+            y + (tailY - y) * (1 - f) - s / 2,
+            s,
+            s,
+          );
         }
       } else {
+        writeCtx.globalAlpha = alpha;
         writeCtx.drawImage(this.spriteParticle, x - s / 2, y - s / 2, s, s);
       }
     }
 
+    writeCtx.globalAlpha = 1;
     this.ppc.swap();
 
-    // Composite Feedback onto main canvas
     ctx.globalCompositeOperation = 'screen';
     ctx.drawImage(this.ppc.read, 0, 0, this.w, this.h);
+  }
 
-    // Draw Beams and Charge Spheres directly onto main canvas for max resolution and brightness
+  private drawChargeAura(
+    ctx: CanvasRenderingContext2D,
+    basis: HandBasis,
+    charge: number,
+    handIndex: number,
+    isImplosion: boolean,
+    color: string,
+    t: number,
+  ): void {
+    const ultimateFeed = this.ultimateArmed && !this.ultimateFiring ? this.ultimateCharge * 0.45 : 0;
+    const intensity = clamp(charge + ultimateFeed, 0, 1.5);
+    if (intensity <= 0.04 || this.firing[handIndex]) return;
+
+    const pulse = 1 + 0.08 * Math.sin(t * (9 + 10 * Math.min(1, intensity)) + handIndex);
+    const condense = isImplosion ? 1 - 0.2 * Math.min(1, intensity) : 1;
+    const radius = (24 + intensity * 58) * condense * pulse;
+
     ctx.globalCompositeOperation = 'screen';
-    const palette = PALETTES[this.config.palette];
+    ctx.globalAlpha = Math.min(1, intensity * 1.25);
+    ctx.drawImage(this.spriteGlow, basis.palmX - radius * 2.2, basis.palmY - radius * 2.2, radius * 4.4, radius * 4.4);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(this.spriteCore, basis.palmX - radius * 0.72, basis.palmY - radius * 0.72, radius * 1.44, radius * 1.44);
 
-    for (let hi = 0; hi < 2; hi++) {
-      const hand = this.lastHands[hi];
-      if (!hand) continue;
-
-      const basis = this.getHandBasis(hand);
-      const intensity = this.charge[hi];
-
-      // Draw Charge Sphere (with chargeEffect flavor + heartbeat that quickens as it fills)
-      if (intensity > 0.05 && !this.firing[hi]) {
-        const pulse = 1 + 0.08 * Math.sin(t * (8 + 12 * Math.min(1, intensity)));
-        // implosion condenses the core slightly as it fills; vortex keeps it steady.
-        const condense = isImplosion ? 1 - 0.18 * Math.min(1, intensity) : 1;
-        const radius = (20 + intensity * 60) * condense * pulse;
-        ctx.globalAlpha = Math.min(1, intensity * 1.5);
-        ctx.drawImage(this.spriteGlow, basis.palmX - radius * 2, basis.palmY - radius * 2, radius * 4, radius * 4);
-        ctx.drawImage(this.spriteCore, basis.palmX - radius, basis.palmY - radius, radius * 2, radius * 2);
-
-        // Vortex: a slim rotating elliptical ring around the sphere.
-        if (!isImplosion) {
-          ctx.save();
-          ctx.translate(basis.palmX, basis.palmY);
-          ctx.rotate(t * 3);
-          ctx.globalAlpha = Math.min(1, intensity) * 0.5;
-          ctx.strokeStyle = palette.primary;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.ellipse(0, 0, radius * 1.7, radius * 0.6, 0, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-
-      // Muzzle flash on fire onset (bright core stamp at the palm).
-      if (this.muzzle[hi] > 0.01) {
-        const fr = (50 + intensity * 60) * this.muzzle[hi];
-        ctx.globalAlpha = this.muzzle[hi];
-        ctx.drawImage(this.spriteCore, basis.palmX - fr, basis.palmY - fr, fr * 2, fr * 2);
-      }
-
-      // Draw Beam!
-      if (this.firing[hi]) {
-        const angle = Math.atan2(basis.forwardY, basis.forwardX);
-        // Fizzle: as charge runs out, the beam narrows and its alpha flickers.
-        const fizzle = intensity < 0.25 ? intensity / 0.25 : 1;
-        const flicker = fizzle < 1 ? 0.7 + 0.3 * Math.random() : 1;
-        const fullLength = Math.max(this.w, this.h) * 1.5;
-        const beamLength = fullLength * this.beamProgress[hi];   // ~100ms ease-in
-        const beamWidth = (40 + intensity * 80) * this.intensityMul * fizzle;
-
-        ctx.save();
-        ctx.translate(basis.palmX, basis.palmY);
-        ctx.rotate(angle);
-        this.drawBeam(ctx, beamLength, beamWidth, intensity * flicker, t);
-        // Beam origin sphere blast
-        const blastRadius = beamWidth * 1.5;
-        ctx.globalAlpha = flicker;
-        ctx.drawImage(this.spriteCore, -blastRadius, -blastRadius, blastRadius * 2, blastRadius * 2);
-        ctx.restore();
-      }
+    ctx.save();
+    ctx.translate(basis.palmX, basis.palmY);
+    ctx.rotate(Math.atan2(basis.forwardY, basis.forwardX));
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    for (let ring = 0; ring < 3; ring++) {
+      const phase = (t * (isImplosion ? -0.9 : 0.9) + ring / 3) % 1;
+      const travel = isImplosion ? 1 - phase : phase;
+      const r = radius * (0.7 + travel * 1.55);
+      ctx.globalAlpha = intensity * (1 - travel) * 0.35;
+      ctx.lineWidth = Math.max(1, 4 - ring);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r * 1.28, r * 0.48, ring * 0.7 + t * (isImplosion ? -1.8 : 2.4), 0, Math.PI * 2);
+      ctx.stroke();
     }
-
     ctx.restore();
   }
 
-  /** Render one beam in the current (already palm-translated + rotated) frame, style-dependent. */
+  private drawNormalBeam(ctx: CanvasRenderingContext2D, basis: HandBasis, handIndex: number, t: number): void {
+    const intensity = this.charge[handIndex];
+    const fizzle = intensity < 0.22 ? intensity / 0.22 : 1;
+    if (fizzle <= 0.01) return;
+
+    const flicker = fizzle < 1 ? 0.72 + 0.28 * Math.random() : 0.94 + Math.random() * 0.06;
+    const end = this.rayToBounds(basis.palmX, basis.palmY, basis.forwardX, basis.forwardY);
+    const beamLength = end * this.beamProgress[handIndex];
+    const beamWidth = clamp((54 + intensity * 92) * this.intensityMul * fizzle, 18, 190);
+    const recoilOffset = this.recoil[handIndex] * 16 * this.intensityMul;
+
+    ctx.save();
+    ctx.translate(basis.palmX - basis.forwardX * recoilOffset, basis.palmY - basis.forwardY * recoilOffset);
+    ctx.rotate(Math.atan2(basis.forwardY, basis.forwardX));
+    this.drawBeam(ctx, beamLength, beamWidth, intensity * flicker, t, false);
+    this.drawImpact(ctx, beamLength, beamWidth, intensity * flicker, t, false);
+    ctx.restore();
+  }
+
+  private drawUltimate(ctx: CanvasRenderingContext2D, color: string, t: number): void {
+    const basis = this.ultimateBasis;
+    if (!basis) return;
+
+    const power = clamp(0.8 + this.ultimateCharge * 0.95 + this.ultimateMuzzle * 0.35, 0.65, 1.7);
+    const end = this.rayToBounds(basis.palmX, basis.palmY, basis.forwardX, basis.forwardY);
+    const beamLength = end * this.ultimateProgress;
+    const beamWidth = clamp((138 + power * 118) * this.intensityMul, 110, 330);
+
+    for (let hi = 0; hi < 2; hi++) {
+      const hand = this.lastHands[hi];
+      if (!hand || hand.track === 'lost') continue;
+      const hb = this.getHandBasis(hand);
+      this.drawFeedLine(ctx, hb.palmX, hb.palmY, basis.palmX, basis.palmY, color, power, t + hi);
+    }
+
+    this.drawMuzzle(ctx, basis, power, Math.max(0.35, this.ultimateMuzzle));
+    ctx.save();
+    ctx.translate(basis.palmX, basis.palmY);
+    ctx.rotate(Math.atan2(basis.forwardY, basis.forwardX));
+    this.drawBeam(ctx, beamLength, beamWidth, power, t, true);
+    this.drawImpact(ctx, beamLength, beamWidth, power, t, true);
+    ctx.restore();
+  }
+
+  private drawFeedLine(
+    ctx: CanvasRenderingContext2D,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    color: string,
+    power: number,
+    t: number,
+  ): void {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const wobble = Math.sin(t * 16) * 18 * power;
+    const cx = (x0 + x1) * 0.5 + nx * wobble;
+    const cy = (y0 + y1) * 0.5 + ny * wobble;
+
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.45 * power;
+    ctx.lineWidth = 18 * power;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.quadraticCurveTo(cx, cy, x1, y1);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 4 * power;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.quadraticCurveTo(cx, cy, x1, y1);
+    ctx.stroke();
+  }
+
+  private drawMuzzle(ctx: CanvasRenderingContext2D, basis: HandBasis, intensity: number, amount: number): void {
+    const radius = (54 + intensity * 70) * amount * this.intensityMul;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = clamp(amount, 0, 1);
+    ctx.drawImage(this.spriteCore, basis.palmX - radius, basis.palmY - radius, radius * 2, radius * 2);
+    ctx.globalAlpha = clamp(amount * 0.55, 0, 0.75);
+    ctx.drawImage(this.spriteGlow, basis.palmX - radius * 1.75, basis.palmY - radius * 1.75, radius * 3.5, radius * 3.5);
+  }
+
   private drawBeam(
     ctx: CanvasRenderingContext2D,
     len: number,
     width: number,
     intensity: number,
     t: number,
+    ultimate: boolean,
   ): void {
     if (len < 1) return;
+
     const style = this.config.params.beamStyle;
-    const a = Math.min(1, intensity);
+    const a = clamp(intensity, 0, ultimate ? 1.35 : 1);
+    const glow = width * (ultimate ? 1.35 : 1.05);
+
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = Math.min(1, a * 0.58);
+    ctx.drawImage(this.beamStrip, 0, -glow, len, glow * 2);
 
     if (style === 'electric') {
-      // Jagged bolt: polyline from palm to tip with timed perpendicular jitter.
-      const glow = width * 0.9;
-      ctx.globalAlpha = a * 0.5;
-      ctx.drawImage(this.beamStrip, 0, -glow, len, glow * 2); // soft glow behind
-      const drawBolt = (amp: number, alpha: number, lw: number) => {
-        ctx.globalAlpha = alpha;
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = lw;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        for (let s = 1; s < BOLT_SEGMENTS; s++) {
-          const f = s / (BOLT_SEGMENTS - 1);
-          ctx.lineTo(len * f, this.boltOffset[s] * amp);
-        }
-        ctx.stroke();
-      };
-      drawBolt(width * 1.6, a, Math.max(2, width * 0.18));      // main bolt
-      drawBolt(width * 2.6, a * 0.35, Math.max(1, width * 0.1)); // fainter branch
+      this.drawElectricBeam(ctx, len, width, a, ultimate);
       return;
     }
 
     if (style === 'laser') {
-      // Thin, crisp, constant width.
-      const w = Math.max(8, width * 0.35);
-      ctx.globalAlpha = a * 0.8;
-      ctx.drawImage(this.beamStrip, 0, -w, len, w * 2);
-      ctx.globalAlpha = a;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, -w * 0.18, len, w * 0.36);
+      this.drawLaserBeam(ctx, len, width, a, ultimate);
       return;
     }
 
-    // plasma (default): living beam whose width undulates along its length.
-    ctx.globalAlpha = a;
+    this.drawPlasmaBeam(ctx, len, width, a, t, ultimate);
+  }
+
+  private drawElectricBeam(
+    ctx: CanvasRenderingContext2D,
+    len: number,
+    width: number,
+    alpha: number,
+    ultimate: boolean,
+  ): void {
+    const drawBolt = (amp: number, a: number, lw: number, phase: number) => {
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = lw;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      for (let s = 1; s < BOLT_SEGMENTS; s++) {
+        const f = s / (BOLT_SEGMENTS - 1);
+        const branch = Math.sin(f * Math.PI * 5 + phase) * 0.22;
+        ctx.lineTo(len * f, (this.boltOffset[s] + branch) * amp);
+      }
+      ctx.stroke();
+    };
+
+    drawBolt(width * (ultimate ? 2.1 : 1.55), alpha, Math.max(3, width * 0.15), 0);
+    drawBolt(width * (ultimate ? 3.1 : 2.25), alpha * 0.36, Math.max(1, width * 0.08), 1.7);
+    drawBolt(width * (ultimate ? 1.2 : 0.85), alpha * 0.9, Math.max(2, width * 0.08), 3.4);
+
+    ctx.globalAlpha = alpha * 0.45;
+    ctx.drawImage(this.beamStrip, 0, -width * 0.58, len, width * 1.16);
+  }
+
+  private drawLaserBeam(
+    ctx: CanvasRenderingContext2D,
+    len: number,
+    width: number,
+    alpha: number,
+    ultimate: boolean,
+  ): void {
+    const core = Math.max(8, width * (ultimate ? 0.24 : 0.18));
+    ctx.globalAlpha = alpha * 0.72;
+    ctx.drawImage(this.beamStrip, 0, -width * 0.52, len, width * 1.04);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = alpha;
+    ctx.fillRect(0, -core * 0.5, len, core);
+    ctx.globalAlpha = alpha * 0.55;
+    ctx.fillRect(0, -core * 1.15, len, core * 0.35);
+    ctx.fillRect(0, core * 0.8, len, core * 0.35);
+  }
+
+  private drawPlasmaBeam(
+    ctx: CanvasRenderingContext2D,
+    len: number,
+    width: number,
+    alpha: number,
+    t: number,
+    ultimate: boolean,
+  ): void {
+    const segs = ultimate ? 18 : 12;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = alpha * 0.95;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    const segs = 10;
-    // top edge out, bottom edge back — a gently wavy quad.
     for (let s = 0; s <= segs; s++) {
       const f = s / segs;
-      const wob = 1 + 0.12 * Math.sin(f * 6 - t * 9);
-      const yEdge = -(width * 0.3) * (1 - f * 0.7) * wob;
+      const taper = 1 - f * (ultimate ? 0.22 : 0.42);
+      const wob = 1 + 0.16 * Math.sin(f * 8 - t * 10) + 0.06 * Math.sin(f * 23 + t * 17);
+      const yEdge = -width * 0.26 * taper * wob;
       if (s === 0) ctx.moveTo(len * f, yEdge);
       else ctx.lineTo(len * f, yEdge);
     }
     for (let s = segs; s >= 0; s--) {
       const f = s / segs;
-      const wob = 1 + 0.12 * Math.sin(f * 6 - t * 9 + Math.PI);
-      const yEdge = (width * 0.3) * (1 - f * 0.7) * wob;
-      ctx.lineTo(len * f, yEdge);
+      const taper = 1 - f * (ultimate ? 0.22 : 0.42);
+      const wob = 1 + 0.16 * Math.sin(f * 8 - t * 10 + Math.PI) + 0.06 * Math.sin(f * 21 - t * 15);
+      ctx.lineTo(len * f, width * 0.26 * taper * wob);
     }
     ctx.closePath();
     ctx.fill();
 
-    // Outer glow via the pre-rendered strip (no per-frame gradient).
-    ctx.globalAlpha = a;
-    ctx.drawImage(this.beamStrip, 0, -width, len, width * 2);
+    ctx.globalAlpha = alpha * 0.52;
+    ctx.drawImage(this.beamStrip, 0, -width * 0.86, len, width * 1.72);
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineCap = 'round';
+    for (let r = -1; r <= 1; r += 2) {
+      ctx.globalAlpha = alpha * 0.34;
+      ctx.lineWidth = Math.max(1, width * 0.035);
+      ctx.beginPath();
+      ctx.moveTo(0, r * width * 0.38);
+      for (let s = 1; s <= segs; s++) {
+        const f = s / segs;
+        const y = r * width * (0.38 + 0.08 * Math.sin(f * 10 + t * 12 + r));
+        ctx.lineTo(len * f, y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  private drawImpact(
+    ctx: CanvasRenderingContext2D,
+    len: number,
+    width: number,
+    intensity: number,
+    t: number,
+    ultimate: boolean,
+  ): void {
+    if (len < 80) return;
+    const a = clamp(intensity, 0, ultimate ? 1.2 : 1);
+    const pulse = 1 + 0.08 * Math.sin(t * 20);
+    const r = width * (ultimate ? 1.35 : 0.95) * pulse;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = a * (ultimate ? 0.72 : 0.46);
+    ctx.drawImage(this.spriteGlow, len - r * 1.6, -r * 1.6, r * 3.2, r * 3.2);
+    ctx.globalAlpha = a * 0.8;
+    ctx.drawImage(this.spriteCore, len - r * 0.55, -r * 0.55, r * 1.1, r * 1.1);
+  }
+
+  private rayToBounds(x: number, y: number, dx: number, dy: number): number {
+    let t = Infinity;
+    if (dx > 0.001) t = Math.min(t, (this.w - x) / dx);
+    else if (dx < -0.001) t = Math.min(t, -x / dx);
+    if (dy > 0.001) t = Math.min(t, (this.h - y) / dy);
+    else if (dy < -0.001) t = Math.min(t, -y / dy);
+    if (!Number.isFinite(t)) return Math.max(this.w, this.h);
+    return clamp(t, 120, Math.max(this.w, this.h) * 1.6);
   }
 
   gracefulRelease(handIndex: number): void {
     this.charge[handIndex] = 0;
     this.firing[handIndex] = false;
     this.wasFiring[handIndex] = false;
+    this.muzzle[handIndex] = 0;
+    this.beamProgress[handIndex] = 0;
+    this.recoil[handIndex] = 0;
+    this.emitterCarry[handIndex] = 0;
+    this.dualFistTime = 0;
+    this.ultimateArmed = false;
+    if (!this.ultimateFiring) this.ultimateCharge = 0;
   }
 
   getActiveCount(): number {
@@ -525,7 +967,6 @@ export class AuraBlasterEffect implements VfxEffect {
 
   stepDownQuality(): void {
     this.cap = Math.max(120, Math.floor(this.cap * 0.75));
+    this.particleCursor %= this.cap;
   }
 }
-
-
