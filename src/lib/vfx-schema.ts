@@ -49,6 +49,9 @@ export interface GlitchTilesConfig extends EffectConfigBase {
     tileShape: 'square' | 'wide' | 'shard';
     pullMode: 'attract' | 'repel' | 'vortex' | 'fan';
     snapBack: 'spring' | 'drift';
+    fragmentSize?: 'large' | 'medium' | 'small' | 'micro';
+    density?: 'sparse' | 'normal' | 'dense' | 'storm';
+    material?: 'glass' | 'mirror' | 'crystal';
   };
 }
 
@@ -58,6 +61,9 @@ export interface ParticleNebulaConfig extends EffectConfigBase {
     motion: 'orbit' | 'stream' | 'swarm';
     openHandAction: 'explode' | 'release';
     trail: 'short' | 'long';
+    particleSize?: 'fine' | 'normal' | 'large';
+    density?: 'sparse' | 'normal' | 'dense';
+    formation?: 'atom' | 'galaxy' | 'black_hole';
   };
 }
 
@@ -66,6 +72,9 @@ export interface AuraBlasterConfig extends EffectConfigBase {
   params: {
     beamStyle: 'laser' | 'plasma' | 'electric';
     chargeEffect: 'implosion' | 'vortex';
+    beamWidth?: 'narrow' | 'normal' | 'wide';
+    beamCount?: 'single' | 'dual' | 'split';
+    chargeSize?: 'compact' | 'normal' | 'massive';
   };
 }
 
@@ -75,6 +84,9 @@ export interface FireMagicConfig extends EffectConfigBase {
     eruption: 'burst' | 'flamethrower';
     form: 'wildfire' | 'plasma';
     trails: 'smoky' | 'clean';
+    flameSize?: 'compact' | 'normal' | 'huge';
+    turbulence?: 'calm' | 'wild';
+    source?: 'palm' | 'fingertips' | 'both';
   };
 }
 
@@ -96,6 +108,9 @@ const glitchTilesSchema = z.object({
     tileShape: z.enum(['square', 'wide', 'shard']),
     pullMode: z.enum(['attract', 'repel', 'vortex', 'fan']),
     snapBack: z.enum(['spring', 'drift']),
+    fragmentSize: z.enum(['large', 'medium', 'small', 'micro']).optional(),
+    density: z.enum(['sparse', 'normal', 'dense', 'storm']).optional(),
+    material: z.enum(['glass', 'mirror', 'crystal']).optional(),
   }),
 });
 
@@ -109,6 +124,9 @@ const particleNebulaSchema = z.object({
     motion: z.enum(['orbit', 'stream', 'swarm']),
     openHandAction: z.enum(['explode', 'release']),
     trail: z.enum(['short', 'long']),
+    particleSize: z.enum(['fine', 'normal', 'large']).optional(),
+    density: z.enum(['sparse', 'normal', 'dense']).optional(),
+    formation: z.enum(['atom', 'galaxy', 'black_hole']).optional(),
   }),
 });
 
@@ -121,6 +139,9 @@ const auraBlasterSchema = z.object({
   params: z.object({
     beamStyle: z.enum(['laser', 'plasma', 'electric']),
     chargeEffect: z.enum(['implosion', 'vortex']),
+    beamWidth: z.enum(['narrow', 'normal', 'wide']).optional(),
+    beamCount: z.enum(['single', 'dual', 'split']).optional(),
+    chargeSize: z.enum(['compact', 'normal', 'massive']).optional(),
   }),
 });
 
@@ -134,6 +155,9 @@ const fireMagicSchema = z.object({
     eruption: z.enum(['burst', 'flamethrower']),
     form: z.enum(['wildfire', 'plasma']),
     trails: z.enum(['smoky', 'clean']),
+    flameSize: z.enum(['compact', 'normal', 'huge']).optional(),
+    turbulence: z.enum(['calm', 'wild']).optional(),
+    source: z.enum(['palm', 'fingertips', 'both']).optional(),
   }),
 });
 
@@ -169,21 +193,35 @@ export const DEFAULT_EFFECT_CONFIG: AuraBlasterConfig = {
 // ─── Base64 URL Encoding / Decoding ─────────────────────────────
 // Same pattern as the existing GameConfig encoder in schema.ts
 
+function toBase64Url(base64: string): string {
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function fromBase64Url(encoded: string): string {
+  const decodedParam = decodeURIComponent(encoded).replace(/ /g, '+');
+  const base64 = decodedParam.replace(/-/g, '+').replace(/_/g, '/');
+  return base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+}
+
 export function encodeEffectConfig(config: EffectConfig): string {
   const jsonStr = JSON.stringify(config);
+  let base64: string;
   if (typeof window === 'undefined') {
-    return Buffer.from(encodeURIComponent(jsonStr)).toString('base64');
+    base64 = Buffer.from(encodeURIComponent(jsonStr)).toString('base64');
+  } else {
+    base64 = btoa(encodeURIComponent(jsonStr));
   }
-  return btoa(encodeURIComponent(jsonStr));
+  return toBase64Url(base64);
 }
 
 export function decodeEffectConfig(encoded: string): EffectConfig | null {
   try {
+    const base64 = fromBase64Url(encoded);
     let jsonString = '';
     if (typeof window === 'undefined') {
-      jsonString = decodeURIComponent(Buffer.from(encoded, 'base64').toString('utf-8'));
+      jsonString = decodeURIComponent(Buffer.from(base64, 'base64').toString('utf-8'));
     } else {
-      jsonString = decodeURIComponent(atob(encoded));
+      jsonString = decodeURIComponent(atob(base64));
     }
     const parsed = JSON.parse(jsonString);
     // Always validate — URLs are user-editable

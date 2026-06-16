@@ -115,7 +115,12 @@ export class ParticleNebulaEffect implements VfxEffect {
     this.w = canvasWidth;
     this.h = canvasHeight;
 
-    this.count = config.intensity === 1 ? 1500 : config.intensity === 2 ? 2800 : 4500;
+    const densityMul = {
+      sparse: 0.62,
+      normal: 1,
+      dense: 1.45,
+    }[config.params.density ?? 'normal'];
+    this.count = Math.round((config.intensity === 1 ? 1500 : config.intensity === 2 ? 2800 : 4500) * densityMul);
     this.px = new Float32Array(this.count);
     this.py = new Float32Array(this.count);
     this.vx = new Float32Array(this.count);
@@ -164,6 +169,11 @@ export class ParticleNebulaEffect implements VfxEffect {
     this.spriteSecondary = makeGlowSprite(32, palette.secondary);
     this.spriteCore = makeGlowSprite(96, palette.glow);
     this.spriteHalo = makeGlowSprite(192, palette.primary);
+    this.spriteScale = {
+      fine: 0.58,
+      normal: 1,
+      large: 1.42,
+    }[config.params.particleSize ?? 'normal'];
     for (const spr of [this.spritePrimary, this.spriteSecondary]) {
       const c = spr.getContext('2d');
       if (c) {
@@ -485,6 +495,20 @@ export class ParticleNebulaEffect implements VfxEffect {
       if (isOpenPalm) openHands.push(hi);
     }
 
+    const preferredFormation = this.config.params.formation;
+
+    if (preferredFormation === 'black_hole' && tracked.length > 0) {
+      return { mode: 'blackHole', hands: fistHands.length > 0 ? fistHands : tracked };
+    }
+
+    if (preferredFormation === 'galaxy' && tracked.length === 2) {
+      return { mode: 'galaxy', hands: [0, 1] };
+    }
+
+    if (preferredFormation === 'atom' && tracked.length === 2 && openHands.length >= 1) {
+      return { mode: 'galaxy', hands: [0, 1] };
+    }
+
     if (fistHands.length > 0) {
       return { mode: 'blackHole', hands: fistHands };
     }
@@ -586,6 +610,7 @@ export class ParticleNebulaEffect implements VfxEffect {
     }
 
     if (this.formMode === 'galaxy') {
+      const atomMode = this.config.params.formation === 'atom';
       const h0 = hands[0];
       const h1 = hands[1];
       if (!h0 || !h1 || h0.track === 'lost' || h1.track === 'lost') return null;
@@ -601,8 +626,8 @@ export class ParticleNebulaEffect implements VfxEffect {
 
       const q = ((i * 0.754877666) % 1);
       const maxR = clamp(dist * 0.62, 135, 355);
-      if (q < 0.18) {
-        const coreQ = q / 0.18;
+      if (q < (atomMode ? 0.26 : 0.18)) {
+        const coreQ = q / (atomMode ? 0.26 : 0.18);
         const coreR = Math.sqrt(coreQ) * clamp(dist * 0.13, 24, 54);
         const coreAng = this.slotPhase[i] + this.formTime * 0.95;
         return {
@@ -614,7 +639,7 @@ export class ParticleNebulaEffect implements VfxEffect {
         };
       }
 
-      const ringQ = (q - 0.18) / 0.82;
+      const ringQ = atomMode ? (q - 0.26) / 0.74 : (q - 0.18) / 0.82;
       const ring = i % 3;
       const arm = i % 4;
       const ringTilt = (ring - 1) * 0.82 + Math.sin(this.formTime * 0.28) * 0.08;
@@ -622,10 +647,10 @@ export class ParticleNebulaEffect implements VfxEffect {
       const ay = uy * Math.cos(ringTilt) + vy * Math.sin(ringTilt);
       const bx = -ux * Math.sin(ringTilt) + vx * Math.cos(ringTilt);
       const by = -uy * Math.sin(ringTilt) + vy * Math.cos(ringTilt);
-      const radius = maxR * (0.36 + Math.sqrt(ringQ) * 0.64);
+      const radius = maxR * (atomMode ? (0.48 + (ring % 2) * 0.17 + ringQ * 0.08) : (0.36 + Math.sqrt(ringQ) * 0.64));
       const armOffset = arm * Math.PI * 0.5;
-      const spiral = ringQ * Math.PI * (2.45 + ring * 0.28);
-      const ang = this.slotPhase[i] * 0.22 + armOffset + spiral + this.formTime * (0.78 + ring * 0.14);
+      const spiral = atomMode ? 0 : ringQ * Math.PI * (2.45 + ring * 0.28);
+      const ang = this.slotPhase[i] * (atomMode ? 1 : 0.22) + armOffset + spiral + this.formTime * (atomMode ? 1.35 + ring * 0.2 : 0.78 + ring * 0.14);
       const localX = Math.cos(ang) * radius;
       const localY = Math.sin(ang) * radius * (0.25 + ring * 0.09);
       const z = Math.sin(ang + ring * 1.7);

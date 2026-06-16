@@ -171,17 +171,32 @@ export class GlitchTilesEffect implements VfxEffect {
     this.primary = palette.primary;
     this.glow = palette.glow;
 
-    this.accentColors = [
-      palette.primary,
-      palette.secondary,
-      palette.glow,
-      '#77ffd7',
-      '#ffe66d',
-      '#b8a7ff',
-      '#ff9ed1',
-      '#b9f2ff',
-    ];
-    this.targetCount = config.intensity === 1 ? 28 : config.intensity === 2 ? 40 : 54;
+    this.accentColors = config.palette === 'mono'
+      ? [
+          '#ffffff',
+          '#e4e4e7',
+          '#c9c9d1',
+          '#a1a1aa',
+          '#71717a',
+          '#f8fafc',
+        ]
+      : [
+          palette.primary,
+          palette.secondary,
+          palette.glow,
+          '#77ffd7',
+          '#ffe66d',
+          '#b8a7ff',
+          '#ff9ed1',
+          '#b9f2ff',
+        ];
+    const densityMul = {
+      sparse: 0.72,
+      normal: 1,
+      dense: 1.35,
+      storm: 1.72,
+    }[config.params.density ?? 'normal'];
+    this.targetCount = Math.round((config.intensity === 1 ? 28 : config.intensity === 2 ? 40 : 54) * densityMul);
 
     // Offscreen trail
     this.trailCanvas = document.createElement('canvas');
@@ -205,13 +220,19 @@ export class GlitchTilesEffect implements VfxEffect {
   }
 
   private spawnCards(): void {
-    const { tileShape } = this.config.params;
+    const { fragmentSize = 'medium', tileShape } = this.config.params;
     this.cards = [];
 
     // Premium vertical glass-tile silhouette: larger than the tiny squares,
     // but still compact enough to keep formations crisp and layered.
-    const baseW = tileShape === 'wide' ? 66 : tileShape === 'shard' ? 58 : 62;
-    const baseH = tileShape === 'wide' ? 80 : tileShape === 'shard' ? 76 : 78;
+    const sizeMul = {
+      large: 1.18,
+      medium: 1,
+      small: 0.66,
+      micro: 0.46,
+    }[fragmentSize];
+    const baseW = (tileShape === 'wide' ? 66 : tileShape === 'shard' ? 52 : 62) * sizeMul;
+    const baseH = (tileShape === 'wide' ? 80 : tileShape === 'shard' ? 86 : 78) * sizeMul;
 
     // Spread the live video sample regions across the frame so faces / motion
     // appear inside the cards (rather than every card showing the same spot).
@@ -241,15 +262,15 @@ export class GlitchTilesEffect implements VfxEffect {
         y: homeY,
         vx: 0,
         vy: 0,
-        rot: 0,
-        angVel: 0,
+        rot: tileShape === 'shard' ? (Math.random() - 0.5) * 0.5 : 0,
+        angVel: tileShape === 'shard' ? (Math.random() - 0.5) * 0.6 : 0,
         w: baseW,
         h: baseH,
         srcX, srcY, srcW, srcH,
         homeX, homeY,
         orbitAngle: (i / this.targetCount) * Math.PI * 2,
         bobPhase: Math.random() * Math.PI * 2,
-        shardRot: 0,
+        shardRot: tileShape === 'shard' ? (Math.random() - 0.5) * 0.55 : 0,
         held: -1,
         grabDX: 0,
         grabDY: 0,
@@ -553,12 +574,22 @@ export class GlitchTilesEffect implements VfxEffect {
           const f = clamp(60000 / (d * d), 0, 4200) * ramp;
           ax += (dx / d) * f;
           ay += (dy / d) * f;
-        } else {
+        } else if (pullMode === 'vortex') {
           // vortex: tangential orbital velocity + weak radial spring to the ring
-          const tang = 3.2 * ramp;        // rad/s sweep
+          const tang = 5.4 * ramp;        // rad/s sweep
           const radialErr = RING_R - d;
-          ax += (-dy / d) * d * tang + (dx / d) * radialErr * 8 * ramp;
-          ay += (dx / d) * d * tang + (dy / d) * radialErr * 8 * ramp;
+          ax += (-dy / d) * d * tang + (dx / d) * radialErr * 12 * ramp;
+          ay += (dx / d) * d * tang + (dy / d) * radialErr * 12 * ramp;
+          c.angVel += (tang * 0.32 + Math.sin(t + c.seed) * 0.25) * dt;
+        } else {
+          const slot = c.orbitAngle + Math.sin(t * 0.5 + c.seed) * 0.35;
+          const spread = RING_R * (0.9 + 0.5 * Math.sin(slot));
+          const tx = near.palm.x + Math.cos(slot) * spread;
+          const ty = near.palm.y + Math.sin(slot) * RING_R * 0.42;
+          ax += (tx - c.x) * 16 * ramp;
+          ay += (ty - c.y) * 16 * ramp;
+          ax += (dx / d) * 520 * ramp;
+          c.angVel += Math.sin(slot) * dt * 1.2;
         }
       } else {
         // No hand near → snapBack behavior
@@ -1035,6 +1066,49 @@ export class GlitchTilesEffect implements VfxEffect {
     return { cx, cy, rx, ry };
   }
 
+  private cardPath(ctx: CanvasRenderingContext2D, c: Card, inset = 0): void {
+    const w = Math.max(4, c.w - inset * 2);
+    const h = Math.max(4, c.h - inset * 2);
+    const x = -w / 2;
+    const y = -h / 2;
+
+    if (this.config.params.tileShape !== 'shard') {
+      const radius = Math.min(12, Math.max(6, w * 0.2));
+      roundRectPath(ctx, x, y, w, h, radius);
+      return;
+    }
+
+    const chip = Math.min(w, h) * 0.18;
+    const skew = Math.sin(c.seed) * chip * 0.45;
+
+    ctx.beginPath();
+    ctx.moveTo(x + chip + skew, y);
+    ctx.lineTo(x + w - chip * 0.55, y + chip * 0.22);
+    ctx.lineTo(x + w, y + h * 0.36);
+    ctx.lineTo(x + w - chip * 0.38, y + h - chip * 0.72);
+    ctx.lineTo(x + w * 0.55 + skew * 0.45, y + h);
+    ctx.lineTo(x + chip * 0.35, y + h - chip * 0.2);
+    ctx.lineTo(x, y + h * 0.58);
+    ctx.lineTo(x + chip * 0.48, y + chip * 0.55);
+    ctx.closePath();
+  }
+
+  private materialTintAlpha(): number {
+    switch (this.config.params.material ?? 'glass') {
+      case 'mirror': return 0.05;
+      case 'crystal': return 0.22;
+      default: return 0.12;
+    }
+  }
+
+  private glassOverlayAlpha(): number {
+    switch (this.config.params.material ?? 'glass') {
+      case 'mirror': return 0.24;
+      case 'crystal': return 0.36;
+      default: return 0.13;
+    }
+  }
+
   draw(ctx: CanvasRenderingContext2D, video: HTMLVideoElement): void {
     const palette = PALETTES[this.config.palette];
 
@@ -1080,10 +1154,8 @@ export class GlitchTilesEffect implements VfxEffect {
 
       const hw = c.w / 2;
       const hh = c.h / 2;
-      const radius = Math.min(12, Math.max(9, c.w * 0.2));
-
       // Clip to card silhouette
-      roundRectPath(ctx, -hw, -hh, c.w, c.h, radius);
+      this.cardPath(ctx, c);
       ctx.save();
       ctx.clip();
 
@@ -1100,10 +1172,10 @@ export class GlitchTilesEffect implements VfxEffect {
       // Inner palette tint
       ctx.fillStyle = palette.bgTreatment;
       ctx.fillRect(-hw, -hh, c.w, c.h);
-      ctx.fillStyle = 'rgba(3,7,12,0.13)';
+      ctx.fillStyle = `rgba(3,7,12,${this.glassOverlayAlpha()})`;
       ctx.fillRect(-hw, -hh, c.w, c.h);
       ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = 0.12 * cardAlpha;
+      ctx.globalAlpha = this.materialTintAlpha() * cardAlpha;
       ctx.fillStyle = c.accent;
       ctx.fillRect(-hw, -hh, c.w, c.h);
       const glassGlow = ctx.createLinearGradient(-hw, -hh, hw, hh);
@@ -1132,26 +1204,26 @@ export class GlitchTilesEffect implements VfxEffect {
       ctx.strokeStyle = 'rgba(255,255,255,0.78)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(-hw + radius, -hh + 2);
-      ctx.lineTo(hw - radius, -hh + 2);
+      ctx.moveTo(-hw + c.w * 0.18, -hh + 2);
+      ctx.lineTo(hw - c.w * 0.18, -hh + 3);
       ctx.stroke();
       ctx.globalAlpha = 0.3 * cardAlpha;
       ctx.beginPath();
-      ctx.moveTo(-hw + 2, -hh + radius);
-      ctx.lineTo(-hw + 2, hh - radius);
+      ctx.moveTo(-hw + 3, -hh + c.h * 0.2);
+      ctx.lineTo(-hw + 2, hh - c.h * 0.2);
       ctx.stroke();
       ctx.globalAlpha = 0.16 * cardAlpha;
       ctx.strokeStyle = 'rgba(255,255,255,0.55)';
       ctx.beginPath();
-      ctx.moveTo(-hw + radius, hh - 2);
-      ctx.lineTo(hw - radius, hh - 2);
+      ctx.moveTo(-hw + c.w * 0.16, hh - 3);
+      ctx.lineTo(hw - c.w * 0.18, hh - 2);
       ctx.stroke();
       ctx.globalAlpha = cardAlpha;
       ctx.globalCompositeOperation = 'source-over';
       ctx.restore(); // undo clip
 
       // Border + glow (re-path; clip is gone)
-      roundRectPath(ctx, -hw, -hh, c.w, c.h, radius);
+      this.cardPath(ctx, c);
 
       if (c.fire > 0.05) {
         ctx.strokeStyle = lerpColor(this.primary, this.emberColor, c.fire);
@@ -1166,7 +1238,7 @@ export class GlitchTilesEffect implements VfxEffect {
       ctx.shadowBlur = 0;
 
       if (c.fire <= 0.05) {
-        roundRectPath(ctx, -hw + 1.5, -hh + 1.5, c.w - 3, c.h - 3, Math.max(6, radius - 2));
+        this.cardPath(ctx, c, 3);
         ctx.globalAlpha = 0.54 * cardAlpha;
         ctx.strokeStyle = 'rgba(255,255,255,0.78)';
         ctx.lineWidth = 0.8;

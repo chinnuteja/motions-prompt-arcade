@@ -8,7 +8,10 @@ const client = new AzureOpenAI({
   apiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview',
 });
 
-const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-5.4-nano';
+const deployment =
+  process.env.AZURE_OPENAI_DEPLOYMENT ||
+  process.env.AZURE_OPENAI_DEPLOYMENT_NAME ||
+  'gpt-4o-mini';
 
 export async function POST(req: Request) {
   try {
@@ -25,13 +28,17 @@ Your job is to take a user's plain-English description of a visual effect and ma
 
 You have access to these specific Effects:
 - 'aura_blaster': Charge massive glowing energy in your fists, open hands to blast plasma beams, or charge both fists then open both hands for a merged ultimate cannon.
-  -> params: beamStyle ("laser"|"plasma"|"electric"), chargeEffect ("implosion"|"vortex")
+  -> required params: beamStyle ("laser"|"plasma"|"electric"), chargeEffect ("implosion"|"vortex")
+  -> optional params: beamWidth ("narrow"|"normal"|"wide"), beamCount ("single"|"dual"|"split"), chargeSize ("compact"|"normal"|"massive")
 - 'particle_nebula': Particles orbit your palm, explode when you open your hand.
-  -> params: motion ("orbit"|"stream"|"swarm"), openHandAction ("explode"|"release"), trail ("short"|"long")
+  -> required params: motion ("orbit"|"stream"|"swarm"), openHandAction ("explode"|"release"), trail ("short"|"long")
+  -> optional params: particleSize ("fine"|"normal"|"large"), density ("sparse"|"normal"|"dense"), formation ("atom"|"galaxy"|"black_hole")
 - 'glitch_tiles': Glass cards that form geometric shapes based on gestures. Open hands for circle swirl, index fingers for lines, fists for card shields.
-  -> params: tileShape ("square"|"wide"|"shard"), pullMode ("attract"|"repel"|"vortex"|"fan"), snapBack ("spring"|"drift")
+  -> required params: tileShape ("square"|"wide"|"shard"), pullMode ("attract"|"repel"|"vortex"|"fan"), snapBack ("spring"|"drift")
+  -> optional params: fragmentSize ("large"|"medium"|"small"|"micro"), density ("sparse"|"normal"|"dense"|"storm"), material ("glass"|"mirror"|"crystal")
 - 'fire_magic': Real fluid fire on your hands. Fist condenses it into a palm core, open hand releases directional flame cones, flamethrowers, or fingertip jets.
-  -> params: eruption ("burst"|"flamethrower"), form ("wildfire"|"plasma"), trails ("smoky"|"clean")
+  -> required params: eruption ("burst"|"flamethrower"), form ("wildfire"|"plasma"), trails ("smoky"|"clean")
+  -> optional params: flameSize ("compact"|"normal"|"huge"), turbulence ("calm"|"wild"), source ("palm"|"fingertips"|"both")
 
 You have access to these Palettes:
 - 'neon': Cyan and magenta
@@ -47,6 +54,8 @@ CRITICAL RULES:
 3. 'intensity' must be exactly 1 (low), 2 (medium), or 3 (high).
 4. 'v' must be exactly 1.
 5. If the user asks for fire/flames WITHOUT explicitly specifying a color, ALWAYS use the 'ember' (orange) palette.
+6. Use optional params when the user asks for size, density, material, formation, beam width/count, source, or turbulence.
+7. Do not invent new params. Stay inside the listed values.
 
 JSON SCHEMA EXAMPLES:
 
@@ -59,7 +68,10 @@ User: "Let me fire huge electric beams from my hands"
   "prompt": "Let me fire huge electric beams from my hands",
   "params": {
     "beamStyle": "electric",
-    "chargeEffect": "implosion"
+    "chargeEffect": "implosion",
+    "beamWidth": "wide",
+    "beamCount": "split",
+    "chargeSize": "massive"
   }
 }
 
@@ -73,7 +85,10 @@ User: "Shatter reality into a black and white mirror"
   "params": {
     "tileShape": "shard",
     "pullMode": "vortex",
-    "snapBack": "drift"
+    "snapBack": "drift",
+    "fragmentSize": "small",
+    "density": "storm",
+    "material": "mirror"
   }
 }
 
@@ -87,7 +102,10 @@ User: "Neon galaxy that explodes when I open my hand"
   "params": {
     "motion": "orbit",
     "openHandAction": "explode",
-    "trail": "long"
+    "trail": "long",
+    "particleSize": "fine",
+    "density": "dense",
+    "formation": "galaxy"
   }
 }
 
@@ -101,7 +119,10 @@ User: "Give me a huge flamethrower"
   "params": {
     "eruption": "flamethrower",
     "form": "plasma",
-    "trails": "clean"
+    "trails": "clean",
+    "flameSize": "huge",
+    "turbulence": "wild",
+    "source": "palm"
   }
 }`;
 

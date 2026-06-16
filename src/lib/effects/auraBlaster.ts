@@ -93,7 +93,12 @@ export class AuraBlasterEffect implements VfxEffect {
     this.spriteParticle = makeGlowSprite(10, palette.primary, 'rgba(0,0,0,0)');
     this.beamStrip = this.makeBeamStrip(palette.primary);
 
-    this.intensityMul = [0.9, 1.05, 1.22][config.intensity - 1] ?? 1.05;
+    const chargeMul = {
+      compact: 0.82,
+      normal: 1,
+      massive: 1.22,
+    }[this.config.params.chargeSize ?? 'normal'];
+    this.intensityMul = ([0.9, 1.05, 1.22][config.intensity - 1] ?? 1.05) * chargeMul;
     this.cap = PARTICLE_COUNTS[config.intensity - 1] ?? 440;
 
     this.px = new Float32Array(this.cap);
@@ -711,14 +716,13 @@ export class AuraBlasterEffect implements VfxEffect {
     const flicker = fizzle < 1 ? 0.72 + 0.28 * Math.random() : 0.94 + Math.random() * 0.06;
     const end = this.rayToBounds(basis.palmX, basis.palmY, basis.forwardX, basis.forwardY);
     const beamLength = end * this.beamProgress[handIndex];
-    const beamWidth = clamp((54 + intensity * 92) * this.intensityMul * fizzle, 18, 190);
+    const beamWidth = clamp((54 + intensity * 92) * this.intensityMul * this.beamWidthMul() * fizzle, 18, 240);
     const recoilOffset = this.recoil[handIndex] * 16 * this.intensityMul;
 
     ctx.save();
     ctx.translate(basis.palmX - basis.forwardX * recoilOffset, basis.palmY - basis.forwardY * recoilOffset);
     ctx.rotate(Math.atan2(basis.forwardY, basis.forwardX));
-    this.drawBeam(ctx, beamLength, beamWidth, intensity * flicker, t, false);
-    this.drawImpact(ctx, beamLength, beamWidth, intensity * flicker, t, false);
+    this.drawPromptBeamPattern(ctx, beamLength, beamWidth, intensity * flicker, t, false);
     ctx.restore();
   }
 
@@ -729,7 +733,7 @@ export class AuraBlasterEffect implements VfxEffect {
     const power = clamp(0.8 + this.ultimateCharge * 0.95 + this.ultimateMuzzle * 0.35, 0.65, 1.7);
     const end = this.rayToBounds(basis.palmX, basis.palmY, basis.forwardX, basis.forwardY);
     const beamLength = end * this.ultimateProgress;
-    const beamWidth = clamp((138 + power * 118) * this.intensityMul, 110, 330);
+    const beamWidth = clamp((138 + power * 118) * this.intensityMul * this.beamWidthMul(), 90, 390);
 
     for (let hi = 0; hi < 2; hi++) {
       const hand = this.lastHands[hi];
@@ -742,9 +746,53 @@ export class AuraBlasterEffect implements VfxEffect {
     ctx.save();
     ctx.translate(basis.palmX, basis.palmY);
     ctx.rotate(Math.atan2(basis.forwardY, basis.forwardX));
-    this.drawBeam(ctx, beamLength, beamWidth, power, t, true);
-    this.drawImpact(ctx, beamLength, beamWidth, power, t, true);
+    this.drawPromptBeamPattern(ctx, beamLength, beamWidth, power, t, true);
     ctx.restore();
+  }
+
+  private beamWidthMul(): number {
+    switch (this.config.params.beamWidth ?? 'normal') {
+      case 'narrow': return 0.62;
+      case 'wide': return 1.34;
+      default: return 1;
+    }
+  }
+
+  private drawPromptBeamPattern(
+    ctx: CanvasRenderingContext2D,
+    beamLength: number,
+    beamWidth: number,
+    power: number,
+    t: number,
+    ultimate: boolean,
+  ): void {
+    const count = this.config.params.beamCount ?? 'single';
+
+    if (count === 'split') {
+      for (const angle of [-0.12, 0, 0.12]) {
+        ctx.save();
+        ctx.rotate(angle);
+        this.drawBeam(ctx, beamLength * (angle === 0 ? 1 : 0.92), beamWidth * (angle === 0 ? 0.72 : 0.48), power, t + angle * 10, ultimate);
+        this.drawImpact(ctx, beamLength * (angle === 0 ? 1 : 0.92), beamWidth * 0.55, power, t, ultimate);
+        ctx.restore();
+      }
+      return;
+    }
+
+    if (count === 'dual') {
+      for (const side of [-1, 1]) {
+        ctx.save();
+        ctx.translate(0, side * beamWidth * 0.32);
+        ctx.rotate(side * 0.035);
+        this.drawBeam(ctx, beamLength, beamWidth * 0.58, power, t + side, ultimate);
+        this.drawImpact(ctx, beamLength, beamWidth * 0.58, power, t, ultimate);
+        ctx.restore();
+      }
+      return;
+    }
+
+    this.drawBeam(ctx, beamLength, beamWidth, power, t, ultimate);
+    this.drawImpact(ctx, beamLength, beamWidth, power, t, ultimate);
   }
 
   private drawFeedLine(

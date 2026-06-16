@@ -94,7 +94,8 @@ export class FireMagicEffect implements VfxEffect {
 
     // Form: wildfire = larger, softer. plasma = tighter, saturated.
     const isPlasma = this.config.params.form === 'plasma';
-    const baseR = isPlasma ? 28 : 42;
+    const flameSizeMul = this.flameSizeMul();
+    const baseR = (isPlasma ? 28 : 42) * flameSizeMul;
 
     this.sprites = {
       core: makeFlameSprite(baseR * 1.5, ramp.core, ramp.mid),
@@ -107,7 +108,7 @@ export class FireMagicEffect implements VfxEffect {
     this.embers = new EmberPool(140);
     this.ringColor = ramp.core;
 
-    this.cap = BLOB_COUNTS[config.intensity - 1] || 300;
+    this.cap = Math.round((BLOB_COUNTS[config.intensity - 1] || 300) * flameSizeMul);
     this.x = new Float32Array(this.cap);
     this.y = new Float32Array(this.cap);
     this.vx = new Float32Array(this.cap);
@@ -142,9 +143,11 @@ export class FireMagicEffect implements VfxEffect {
     this.lastDt = dt;
     const t = performance.now() * 0.001;
     const isPlasma = this.config.params.form === 'plasma';
-    const curlStrength = isPlasma ? 260 : 340;
-    const microCurlStrength = isPlasma ? 420 : 520;
-    const buoyancy = isPlasma ? 680 : 520;
+    const turbulenceMul = this.turbulenceMul();
+    const flameSizeMul = this.flameSizeMul();
+    const curlStrength = (isPlasma ? 260 : 340) * turbulenceMul;
+    const microCurlStrength = (isPlasma ? 420 : 520) * turbulenceMul;
+    const buoyancy = (isPlasma ? 680 : 520) * (this.config.params.turbulence === 'calm' ? 0.82 : 1);
 
     // Heat sources from hands
     const activeSources: HeatSource[] = [];
@@ -212,26 +215,31 @@ export class FireMagicEffect implements VfxEffect {
 
       // Continuous fire logic
       if (isOpen) {
+        const source = this.config.params.source ?? (this.config.params.eruption === 'flamethrower' ? 'palm' : 'fingertips');
         if (this.config.params.eruption === 'flamethrower' && !eruptingThisFrame) {
           // Layered palm stream: dense core, rolling side flame, and knuckle contour.
-          for (const src of this.flamethrowerSources(hand, basis)) activeSources.push(src);
-          this.injectFlamethrower(hand, basis, hi, dt, ramp);
+          if (source !== 'fingertips') {
+            for (const src of this.flamethrowerSources(hand, basis)) activeSources.push(src);
+            this.injectFlamethrower(hand, basis, hi, dt, ramp);
+          }
+          if (source !== 'palm') {
+            for (const src of this.fingertipJetSources(hand, basis, 0.94, 760)) activeSources.push(src);
+          }
         } else if (this.config.params.eruption === 'burst' && !eruptingThisFrame) {
           // Fingertip jets! Fire shoots continuously from fingertips
-          const fingertips = [8, 12, 16, 20];
-          for (const ti of fingertips) {
-            const lm = hand.landmarks[ti];
-            if (lm) {
-              activeSources.push({
-                x: lm.x,
-                y: lm.y,
-                h: 0.85,
-                vx: basis.forwardX * 600 + (Math.random() - 0.5) * 150 + hand.indexVel.x * 0.4,
-                vy: basis.forwardY * 600 + (Math.random() - 0.5) * 150 + hand.indexVel.y * 0.4,
-                spread: 14,
-                radius: 0.7,
-              });
-            }
+          if (source !== 'palm') {
+            for (const src of this.fingertipJetSources(hand, basis, 0.85, 600)) activeSources.push(src);
+          }
+          if (source !== 'fingertips') {
+            activeSources.push({
+              x: basis.palmX,
+              y: basis.palmY,
+              h: 0.8,
+              vx: basis.forwardX * 700 + hand.indexVel.x * 0.25,
+              vy: basis.forwardY * 700 + hand.indexVel.y * 0.25 - 80,
+              spread: clamp(basis.scale * 0.24, 14, 36),
+              radius: 0.8,
+            });
           }
         }
       }
@@ -269,8 +277,8 @@ export class FireMagicEffect implements VfxEffect {
             i,
             src.x + (Math.random() - 0.5) * spread,
             src.y + (Math.random() - 0.5) * spread,
-            src.vx * (0.82 + Math.random() * 0.36) + (Math.random() - 0.5) * 180,
-            src.vy * (0.82 + Math.random() * 0.36) + (Math.random() - 0.5) * 180,
+            src.vx * (0.82 + Math.random() * 0.36) * flameSizeMul + (Math.random() - 0.5) * 180 * turbulenceMul,
+            src.vy * (0.82 + Math.random() * 0.36) * flameSizeMul + (Math.random() - 0.5) * 180 * turbulenceMul,
             src.h * ramp,
           );
           this.r[i] *= src.radius;
@@ -349,8 +357,9 @@ export class FireMagicEffect implements VfxEffect {
   }
 
   private pushShockLobe(basis: HandBasis, charge: number): void {
-    const length = clamp(basis.scale * (4.6 + charge * 4.2), 260, 760);
-    const width = clamp(basis.scale * (1.0 + charge * 1.45), 90, 340);
+    const flameSizeMul = this.flameSizeMul();
+    const length = clamp(basis.scale * (4.6 + charge * 4.2) * flameSizeMul, 220, 920);
+    const width = clamp(basis.scale * (1.0 + charge * 1.45) * flameSizeMul, 72, 420);
     this.shockLobes.push({
       x: basis.palmX,
       y: basis.palmY,
@@ -395,10 +404,11 @@ export class FireMagicEffect implements VfxEffect {
 
   private seedEruptionCone(hand: HandSignals, basis: HandBasis, charge: number): void {
     const isPlasma = this.config.params.form === 'plasma';
-    const count = Math.floor((isPlasma ? 72 : 96) + 76 * charge);
-    const length = clamp(basis.scale * (5.2 + charge * (isPlasma ? 3.2 : 4.1)), 330, 880);
-    const widthBase = basis.scale * (isPlasma ? 0.28 : 0.42);
-    const widthGrow = basis.scale * (isPlasma ? 1.05 : 1.62) * (0.75 + charge * 0.5);
+    const flameSizeMul = this.flameSizeMul();
+    const count = Math.floor(((isPlasma ? 72 : 96) + 76 * charge) * flameSizeMul);
+    const length = clamp(basis.scale * (5.2 + charge * (isPlasma ? 3.2 : 4.1)) * flameSizeMul, 260, 1040);
+    const widthBase = basis.scale * (isPlasma ? 0.28 : 0.42) * flameSizeMul;
+    const widthGrow = basis.scale * (isPlasma ? 1.05 : 1.62) * (0.75 + charge * 0.5) * flameSizeMul;
     const thrustBase = (isPlasma ? 1420 : 1180) + charge * (isPlasma ? 1250 : 1040);
 
     for (let i = 0; i < count; i++) {
@@ -489,6 +499,25 @@ export class FireMagicEffect implements VfxEffect {
     return sources;
   }
 
+  private fingertipJetSources(hand: HandSignals, basis: HandBasis, heat: number, speed: number): HeatSource[] {
+    const sources: HeatSource[] = [];
+    const fingertips = [8, 12, 16, 20];
+    for (const ti of fingertips) {
+      const lm = hand.landmarks[ti];
+      if (!lm) continue;
+      sources.push({
+        x: lm.x,
+        y: lm.y,
+        h: heat,
+        vx: basis.forwardX * speed + (Math.random() - 0.5) * 150 + hand.indexVel.x * 0.4,
+        vy: basis.forwardY * speed + (Math.random() - 0.5) * 150 + hand.indexVel.y * 0.4,
+        spread: 14 * this.flameSizeMul(),
+        radius: this.config.params.flameSize === 'compact' ? 0.5 : 0.7,
+      });
+    }
+    return sources;
+  }
+
   private flamethrowerSources(hand: HandSignals, basis: HandBasis): HeatSource[] {
     const isPlasma = this.config.params.form === 'plasma';
     const speed = isPlasma ? 1680 : 1450;
@@ -573,6 +602,22 @@ export class FireMagicEffect implements VfxEffect {
     const a = Math.sin(x * s1 + t * 9.0) * Math.cos(y * s1 - t * 7.0);
     const b = Math.cos(x * s2 - t * 11.0) * Math.sin(y * s2 + t * 8.0);
     return { x: b - a * 0.35, y: -a - b * 0.35 };
+  }
+
+  private flameSizeMul(): number {
+    switch (this.config.params.flameSize ?? 'normal') {
+      case 'compact': return 0.72;
+      case 'huge': return 1.38;
+      default: return 1;
+    }
+  }
+
+  private turbulenceMul(): number {
+    switch (this.config.params.turbulence) {
+      case 'calm': return 0.58;
+      case 'wild': return 1.28;
+      default: return 1;
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, video: HTMLVideoElement): void {
