@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { AzureOpenAI } from 'openai';
-import { validateEffectConfig, DEFAULT_EFFECT_CONFIG } from '../../../lib/vfx-schema';
+import { validateEffectConfig, DEFAULT_EFFECT_CONFIG, EffectConfig } from '../../../lib/vfx-schema';
 
 const client = new AzureOpenAI({
   apiKey: process.env.AZURE_OPENAI_API_KEY || '',
@@ -12,6 +12,28 @@ const deployment =
   process.env.AZURE_OPENAI_DEPLOYMENT ||
   process.env.AZURE_OPENAI_DEPLOYMENT_NAME ||
   'gpt-4o-mini';
+
+function applyPromptColorOverrides(config: EffectConfig, prompt: string): EffectConfig {
+  const lower = prompt.toLowerCase();
+  const asksBlackAndWhite = /\b(black\s+(and|&)\s+white|white\s+(and|&)\s+black|black[- ]white|monochrome|high contrast)\b/.test(lower);
+  const asksBlackOcean = /\b(black|dark|shadow|void|obsidian|eclipse)\s+ocean\b|\bocean\s+(black|dark|shadow|void|obsidian|eclipse)\b/.test(lower);
+  const asksBlack = /\b(black|dark|shadow|void|obsidian|eclipse)\b/.test(lower);
+  const asksWhite = /\b(white|silver|pearl|ghost|ice|frost)\b/.test(lower);
+
+  if (asksBlackAndWhite && !asksBlackOcean) {
+    return { ...config, palette: 'mono' };
+  }
+
+  if (asksWhite) {
+    return { ...config, palette: 'mono' };
+  }
+
+  if (asksBlack) {
+    return { ...config, palette: 'void' };
+  }
+
+  return config;
+}
 
 export async function POST(req: Request) {
   try {
@@ -47,6 +69,7 @@ You have access to these Palettes:
 - 'mono': High-contrast black and white
 - 'acid': Toxic green and yellow
 - 'ocean': Deep blues and aqua
+- 'void': Black, shadow, obsidian, dark ocean, eclipse, smoky darkness with pale edge glow
 
 CRITICAL RULES:
 1. Respond with ONLY valid JSON. No markdown, no fences.
@@ -56,6 +79,9 @@ CRITICAL RULES:
 5. If the user asks for fire/flames WITHOUT explicitly specifying a color, ALWAYS use the 'ember' (orange) palette.
 6. Use optional params when the user asks for size, density, material, formation, beam width/count, source, or turbulence.
 7. Do not invent new params. Stay inside the listed values.
+8. If the user asks for black and white, high contrast, or monochrome, use palette 'mono'.
+9. If the user explicitly asks for black, dark, shadow, void, obsidian, eclipse, or black ocean, use palette 'void'. Do not use 'void' for "black and white".
+10. If the user explicitly asks for white, silver, pearl, ghost, ice, or frost, use palette 'mono'.
 
 JSON SCHEMA EXAMPLES:
 
@@ -155,7 +181,7 @@ User: "Give me a huge flamethrower"
       return NextResponse.json({ config: DEFAULT_EFFECT_CONFIG });
     }
 
-    return NextResponse.json({ config });
+    return NextResponse.json({ config: applyPromptColorOverrides(config, prompt) });
 
   } catch (error: unknown) {
     console.error('API Error:', error);

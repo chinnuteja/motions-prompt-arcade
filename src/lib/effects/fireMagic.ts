@@ -749,8 +749,10 @@ export class FireMagicEffect implements VfxEffect {
     this.ppc.swap();
 
     // 3. Composite fire up to main canvas
-    ctx.globalCompositeOperation = 'screen';
+    ctx.globalCompositeOperation = this.config.palette === 'void' ? 'source-over' : 'screen';
+    ctx.globalAlpha = this.config.palette === 'void' ? 0.88 : 1;
     ctx.drawImage(this.ppc.read, 0, 0, this.w, this.h);
+    ctx.globalAlpha = 1;
 
     // Crisp charge glow on top: a heartbeat that beats faster as the charge fills.
     const t = performance.now() * 0.001;

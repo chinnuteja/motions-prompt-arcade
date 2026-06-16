@@ -151,6 +151,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
 
   const palette: PaletteColors = PALETTES[config.palette];
   const meta = EFFECT_META[config.effect];
+  const uiAccent = config.palette === 'void' ? palette.glow : palette.primary;
 
   // ── Hand tracking hook
   const setVideoNode = useCallback((node: HTMLVideoElement | null) => {
@@ -483,23 +484,23 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
           <div className={styles.onboardingCard}>
             <span className={styles.onboardingSub}>CALIBRATING ENGINE</span>
             
-            <div className={styles.promptTitle} style={{ color: palette.primary }}>
+            <div className={styles.promptTitle} style={{ color: uiAccent }}>
               ⚡ {config.prompt}
             </div>
 
             <div className={styles.instructionBox}>
-              <h3 className={styles.instructionTitle} style={{ borderBottomColor: `${palette.primary}20` }}>
+              <h3 className={styles.instructionTitle} style={{ borderBottomColor: `${uiAccent}20` }}>
                 {INSTRUCTION_DETAILS[config.effect].title}
               </h3>
               <ul className={styles.instructionList}>
                 {INSTRUCTION_DETAILS[config.effect].steps.map((step, i) => (
                   <li key={i} className={styles.instructionStep}>
-                    <span className={styles.stepNum} style={{ color: palette.primary }}>0{i + 1}</span>
+                    <span className={styles.stepNum} style={{ color: uiAccent }}>0{i + 1}</span>
                     <span className={styles.stepText}>{step}</span>
                   </li>
                 ))}
               </ul>
-              <div className={styles.onboardingGestureRow} style={{ color: palette.primary }}>
+              <div className={styles.onboardingGestureRow} style={{ color: uiAccent }}>
                 <span className={styles.gestureHeader}>GESTURES:</span>
                 <span className={styles.gestureDetails}>{INSTRUCTION_DETAILS[config.effect].gesture}</span>
               </div>
@@ -511,7 +512,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
             
             <button
               className={styles.enableButton}
-              style={{ background: palette.primary, boxShadow: `0 0 30px ${palette.glow}40` }}
+              style={{ background: uiAccent, boxShadow: `0 0 30px ${palette.glow}40` }}
               onClick={requestCamera}
             >
               Enable Camera & Begin
@@ -565,7 +566,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
             <div className={styles.showHands}>✋ Show me your hands</div>
             <div className={styles.gestureHint}>{meta.gestureHint}</div>
           </div>
-          <div className={styles.titleCard} style={{ color: palette.primary }}>
+          <div className={styles.titleCard} style={{ color: uiAccent }}>
             {config.prompt}
           </div>
         </>
@@ -631,7 +632,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
           <div className={styles.helpOverlayContent}>
             <button className={styles.closeHelpButton} onClick={() => setShowHelp(false)}>×</button>
             <span className={styles.onboardingSub}>TRANSMISSION MANUAL</span>
-            <h2 className={styles.helpOverlayTitle} style={{ color: palette.primary }}>
+            <h2 className={styles.helpOverlayTitle} style={{ color: uiAccent }}>
               {INSTRUCTION_DETAILS[config.effect].title}
             </h2>
             <div className={styles.helpPrompt}>
@@ -642,12 +643,12 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
               <ul className={styles.instructionList}>
                 {INSTRUCTION_DETAILS[config.effect].steps.map((step, i) => (
                   <li key={i} className={styles.instructionStep}>
-                    <span className={styles.stepNum} style={{ color: palette.primary }}>0{i + 1}</span>
+                    <span className={styles.stepNum} style={{ color: uiAccent }}>0{i + 1}</span>
                     <span className={styles.stepText}>{step}</span>
                   </li>
                 ))}
               </ul>
-              <div className={styles.onboardingGestureRow} style={{ color: palette.primary, background: 'rgba(255,255,255,0.03)', borderTopStyle: 'solid' }}>
+              <div className={styles.onboardingGestureRow} style={{ color: uiAccent, background: 'rgba(255,255,255,0.03)', borderTopStyle: 'solid' }}>
                 <span className={styles.gestureHeader}>GESTURES:</span>
                 <span className={styles.gestureDetails}>{INSTRUCTION_DETAILS[config.effect].gesture}</span>
               </div>
@@ -655,7 +656,7 @@ export function EffectEngine({ config, effect }: EffectEngineProps) {
 
             <button 
               className={styles.closeHelpActionBtn}
-              style={{ background: palette.primary }}
+              style={{ background: uiAccent }}
               onClick={() => setShowHelp(false)}
             >
               Resume Experience

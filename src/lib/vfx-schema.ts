@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 export type EffectType = 'glitch_tiles' | 'particle_nebula' | 'aura_blaster' | 'fire_magic';
 
-export type PaletteId = 'neon' | 'ember' | 'vapor' | 'mono' | 'acid' | 'ocean';
+export type PaletteId = 'neon' | 'ember' | 'vapor' | 'mono' | 'acid' | 'ocean' | 'void';
 
 // ─── Palette Presets (client-side only, never sent to LLM) ──────
 
@@ -22,7 +22,10 @@ export const PALETTES: Record<PaletteId, PaletteColors> = {
   mono:  { primary: '#ffffff', secondary: '#888888', glow: '#cccccc', bgTreatment: 'rgba(0,0,0,0.30)' },
   acid:  { primary: '#aaff00', secondary: '#00ff88', glow: '#ccff33', bgTreatment: 'rgba(0,10,0,0.25)' },
   ocean: { primary: '#0088ff', secondary: '#00ccaa', glow: '#44aaff', bgTreatment: 'rgba(0,5,15,0.25)' },
+  void:  { primary: '#111827', secondary: '#020617', glow: '#cbd5e1', bgTreatment: 'rgba(0,0,0,0.46)' },
 };
+
+const paletteSchema = z.enum(['neon', 'ember', 'vapor', 'mono', 'acid', 'ocean', 'void']);
 
 // ─── Per-Effect Metadata (client-side, for onboarding HUD) ──────
 
@@ -101,7 +104,7 @@ export type EffectConfig =
 const glitchTilesSchema = z.object({
   v: z.literal(1),
   effect: z.literal('glitch_tiles'),
-  palette: z.enum(['neon', 'ember', 'vapor', 'mono', 'acid', 'ocean']),
+  palette: paletteSchema,
   intensity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   prompt: z.string(),
   params: z.object({
@@ -117,7 +120,7 @@ const glitchTilesSchema = z.object({
 const particleNebulaSchema = z.object({
   v: z.literal(1),
   effect: z.literal('particle_nebula'),
-  palette: z.enum(['neon', 'ember', 'vapor', 'mono', 'acid', 'ocean']),
+  palette: paletteSchema,
   intensity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   prompt: z.string(),
   params: z.object({
@@ -133,7 +136,7 @@ const particleNebulaSchema = z.object({
 const auraBlasterSchema = z.object({
   v: z.literal(1),
   effect: z.literal('aura_blaster'),
-  palette: z.enum(['neon', 'ember', 'vapor', 'mono', 'acid', 'ocean']),
+  palette: paletteSchema,
   intensity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   prompt: z.string(),
   params: z.object({
@@ -148,7 +151,7 @@ const auraBlasterSchema = z.object({
 const fireMagicSchema = z.object({
   v: z.literal(1),
   effect: z.literal('fire_magic'),
-  palette: z.enum(['neon', 'ember', 'vapor', 'mono', 'acid', 'ocean']),
+  palette: paletteSchema,
   intensity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   prompt: z.string(),
   params: z.object({

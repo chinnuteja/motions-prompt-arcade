@@ -270,6 +270,19 @@ export interface FireRamp {
  * core blends white→glow, mid = glow→primary, cool = primary→secondary.
  */
 export function buildFireRamp(palette: PaletteColors): FireRamp {
+  const primary = hexToRgb(palette.primary);
+  const secondary = hexToRgb(palette.secondary);
+  const primaryLuma = primary.r * 0.2126 + primary.g * 0.7152 + primary.b * 0.0722;
+  const secondaryLuma = secondary.r * 0.2126 + secondary.g * 0.7152 + secondary.b * 0.0722;
+
+  if (primaryLuma < 45 && secondaryLuma < 35) {
+    return {
+      core: lerpColor('#ffffff', palette.glow, 0.18),
+      mid: lerpColor(palette.primary, palette.glow, 0.18),
+      cool: '#000000',
+    };
+  }
+
   return {
     core: lerpColor('#ffffff', palette.glow, 0.35),
     mid: lerpColor(palette.glow, palette.primary, 0.5),
